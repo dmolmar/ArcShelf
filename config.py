@@ -16,6 +16,9 @@ TAGS_CSV_PATH = MODELS_DIR / 'selected_tags.csv'
 
 ICON_PATH = BASE_DIR / 'arcueid.ico'
 
+# Define supported image file extensions (lowercase, include leading dot)
+SUPPORTED_FORMATS = ('.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif', '.tiff', '.tif')
+
 # Ensure data directories exist
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CACHE_DIR.mkdir(parents=True, exist_ok=True)

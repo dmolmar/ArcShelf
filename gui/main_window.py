@@ -1130,37 +1130,86 @@ class ImageGallery(QMainWindow):
                      self.processed_images_count += 1; task_queue.task_done(); continue
 
                  basename = os.path.basename(path)
-                 if status_callback: status_callback(f"Reprocessing {basename}...")
+                 status_msg_prefix = f"Reprocessing {basename}:"
+                 update_parts = [] # To collect parts of the UPDATE query for metadata
+                 update_params = [] # To collect params for the UPDATE query
 
                  if properties.get("tags"):
                      if not model_loaded:
-                          self.model.load_model(); model_loaded = True
-                     with Image.open(path) as img: predictions = self.model.predict(img)
-                     self.db.add_image(path, predictions, self.model)
-                     if status_callback: status_callback(" Tags ✓")
-                 if properties.get("thumbnail"):
-                     self.thumbnail_cache.update_thumbnail(path, image_id)
-                     if status_callback: status_callback(" Thumb ✓")
-                 if properties.get("metadata"):
+                          try: self.model.load_model(); model_loaded = True
+                          except Exception as model_err:
+                               if status_callback: status_callback(f" Model Load Error: {model_err}"); raise model_err # Propagate model load error
                      try:
-                         mod_time = os.path.getmtime(path); size = os.path.getsize(path)
-                         with Image.open(path) as img: res = f"{img.width}x{img.height}"
-                         with self.db.lock, sqlite3.connect(self.db.db_path) as conn:
-                              conn.execute("UPDATE images SET file_size=?, modification_time=?, resolution=? WHERE id=?", (size, mod_time, res, image_id))
-                         if status_callback: status_callback(" Meta ✓")
-                     except Exception as meta_err:
-                          if status_callback: status_callback(f" Meta Error: {meta_err}")
+                          with Image.open(path) as img: predictions = self.model.predict(img)
+                          self.db.add_image(path, predictions, self.model) # add_image handles update logic
+                          if status_callback: status_callback(" Tags ✓")
+                     except Exception as tag_err:
+                          if status_callback: status_callback(f" Tags Error: {tag_err}")
 
+                 if properties.get("thumbnail"):
+                     try:
+                          self.thumbnail_cache.update_thumbnail(path, image_id)
+                          if status_callback: status_callback(" Thumb ✓")
+                     except Exception as thumb_err:
+                          if status_callback: status_callback(f" Thumb Error: {thumb_err}")
+
+                 # --- Handle Metadata Updates ---
+                 needs_metadata_update = False
+                 try:
+                      current_mod_time = os.path.getmtime(path) if properties.get("mod_time") else None
+                      current_size = os.path.getsize(path) if properties.get("file_size") else None
+                      current_res = None
+                      if properties.get("resolution"):
+                           try:
+                                with Image.open(path) as img: current_res = f"{img.width}x{img.height}"
+                           except Exception as img_err:
+                                if status_callback: status_callback(f" Res Error (PIL): {img_err}")
+
+                      if current_mod_time is not None:
+                           update_parts.append("modification_time = ?")
+                           update_params.append(current_mod_time)
+                           needs_metadata_update = True
+                      if current_size is not None:
+                           update_parts.append("file_size = ?")
+                           update_params.append(current_size)
+                           needs_metadata_update = True
+                      if current_res is not None:
+                           update_parts.append("resolution = ?")
+                           update_params.append(current_res)
+                           needs_metadata_update = True
+
+                      # Perform the combined metadata update if needed
+                      if needs_metadata_update:
+                           update_params.append(image_id) # Add image_id for WHERE clause
+                           sql = f"UPDATE images SET {', '.join(update_parts)} WHERE id = ?"
+                           with self.db.lock, sqlite3.connect(self.db.db_path) as conn:
+                                conn.execute(sql, update_params)
+                           if status_callback: status_callback(" Meta ✓")
+
+                 except Exception as meta_err:
+                      needs_metadata_update = False # Ensure we don't log success
+                      if status_callback: status_callback(f" Meta Error (FS/DB): {meta_err}")
+                 # --- End Metadata Updates ---
+
+                 # Final status update for the image
                  self.processed_images_count += 1
                  progress = (self.processed_images_count / self.total_images_to_process) * 100 if self.total_images_to_process > 0 else 0
                  if status_callback: status_callback(f" ({self.processed_images_count}/{self.total_images_to_process} - {progress:.1f}%)\n")
 
             except Exception as e:
+                 # Catch errors not handled within specific property checks (like model load)
                  self.processed_images_count += 1
                  error_str = f"Error reprocessing {image_id} ({path}): {e}\n"
                  if status_callback: status_callback(error_str)
                  print(error_str.strip()); traceback.print_exc()
-            finally: task_queue.task_done()
+            finally:
+                if status_callback: # Ensure prefix is always added if callback exists
+                     # Prepend prefix to any status messages emitted within the loop
+                     # Note: This might prepend multiple times if status is emitted incrementally
+                     # A better approach might be to build the full status line before emitting.
+                     # Let's emit the prefix here instead.
+                     status_callback(status_msg_prefix)
+                task_queue.task_done()
         print("Worker finished reprocessing image queue.")
 
     def on_reprocessing_finished(self):
