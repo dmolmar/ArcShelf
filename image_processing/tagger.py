@@ -3,11 +3,11 @@ from typing import List, Optional
 from collections import defaultdict
 from PIL import Image
 
-# Relative imports within the package
-from .predictor import WaifuTagger
-from ..database.models import TagPrediction
+# Absolute imports
+from image_processing.predictor import WaifuTagger
+from database.models import TagPrediction
 # Import config to potentially get default paths or settings if needed later
-from .. import config
+import config
 
 class ImageTaggerModel:
     """

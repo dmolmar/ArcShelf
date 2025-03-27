@@ -29,17 +29,17 @@ from PyQt6.QtCore import (
 from PIL import Image, UnidentifiedImageError
 
 # --- Local Imports (within arc_explorer package) ---
-from .. import config # For base directory, paths
-from ..database.db_manager import Database
-from ..database.models import TagPrediction
-from ..image_processing.thumbnail import ThumbnailCache
-from ..image_processing.tagger import ImageTaggerModel
-from ..search.query_parser import SearchQueryParser, ASTNode # Import base ASTNode
-from ..search.query_evaluator import SearchQueryEvaluator
-from ..utils.workers import Worker, ThumbnailLoader # Assuming ThumbnailLoaderSignals is not needed directly here
-from .widgets.image_label import ImageLabel
-from .widgets.drag_drop_area import DragDropArea
-from .widgets.advanced_search import AdvancedSearchPanel # Import the actual panel
+import config # For base directory, paths
+from database.db_manager import Database
+from database.models import TagPrediction
+from image_processing.thumbnail import ThumbnailCache
+from image_processing.tagger import ImageTaggerModel
+from search.query_parser import SearchQueryParser, ASTNode # Import base ASTNode
+from search.query_evaluator import SearchQueryEvaluator
+from utils.workers import Worker, ThumbnailLoader # Assuming ThumbnailLoaderSignals is not needed directly here
+from gui.widgets.image_label import ImageLabel
+from gui.widgets.drag_drop_area import DragDropArea
+from gui.widgets.advanced_search import AdvancedSearchPanel # Import the actual panel
 # Dialogs will be imported within methods where needed
 # from .dialogs.manage_directories import ManageDirectoriesDialog
 # from .dialogs.export_jpg import ExportAsJPGDialog
