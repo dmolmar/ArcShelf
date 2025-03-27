@@ -1,13 +1,8 @@
 import sys
 from pathlib import Path
 
-# Determine if running as a bundled executable (PyInstaller) or as a script
-if getattr(sys, 'frozen', False):
-    # If the application is run as a bundle, the base path is the directory containing the executable
-    BASE_DIR = Path(sys.executable).resolve().parent
-else:
-    # If run as a script, the base path is the directory containing this config file's parent directory (i.e., ARC-EXPLORER/)
-    BASE_DIR = Path(__file__).resolve().parent.parent
+# Si se ejecuta como script, el directorio base es el que contiene este archivo config.py
+BASE_DIR = Path(__file__).resolve().parent
 
 # Define key directories relative to the base directory
 DATA_DIR = BASE_DIR / 'data'
