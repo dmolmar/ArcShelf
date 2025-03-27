@@ -68,7 +68,6 @@ def human_readable_size(size_bytes: Optional[int]) -> str:
 class ImageGallery(QMainWindow):
     # Define signals used for cross-thread communication or decoupling
     thumbnailLoaded = pyqtSignal(str, QPixmap) # image_id (str UUID), pixmap
-    imageDisplayed = pyqtSignal(str, bool) # img_path, analyze
     imageLoadedSignal = pyqtSignal(QPixmap) # pixmap for drag-drop area
     imageAnalysisSignal = pyqtSignal(str) # info_text
     imageInfoSignal = pyqtSignal(str, str) # info_text, img_path
@@ -98,7 +97,6 @@ class ImageGallery(QMainWindow):
         self.last_selected_image_path: Optional[str] = None
         self.suppress_search_on_dropdown_update: bool = False
         self.active_directories: Set[str] = set()
-        self.directory_queue: Queue[str] = Queue()
         self.is_processing: bool = False
         self.processed_directories: List[str] = []
         self.total_images_to_process: int = 0
@@ -111,7 +109,6 @@ class ImageGallery(QMainWindow):
         self.thumbnail_loaders: Dict[int, Tuple[ImageLabel, str]] = {}
         self._temp_pred_callback: Optional[Callable] = None # For drag-drop predictions
         self._suggestions_map: Dict[str, str] = {}
-        self._main_tag_suggestions_map: Dict[str, str] = {} # Map for suggestions managed by main window
         self._ignore_cursor_change_on_focus = False
 
         # --- Initialization ---

@@ -89,10 +89,6 @@ class ManageDirectoriesDialog(QDialog):
         self.setup_ui()
         self.load_directories() # Load initial directories
 
-        # Timer for duplicate detection progress updates
-        self.progress_timer = QTimer(self)
-        self.progress_timer.timeout.connect(self.update_progress_info)
-
         # Set initial dialog size based on screen
         try:
             screen = QApplication.primaryScreen()
@@ -634,7 +630,7 @@ class ManageDirectoriesDialog(QDialog):
         last_status_update_time = datetime.datetime.now().timestamp()
         update_interval_seconds = 1.0
 
-        print(f"compare_image_tags: Starting {total_comparisons} pairwise comparisons...")
+        print(f"compare_image_tags: Starting {total_comparisons} pairwise comparisons...\n")
         if status_callback: status_callback(f"Comparing {n} images ({total_comparisons:,} pairs)...\n")
 
         for i in range(n):
@@ -650,12 +646,12 @@ class ManageDirectoriesDialog(QDialog):
                 current_time = datetime.datetime.now().timestamp()
                 if status_callback and (current_time - last_status_update_time >= update_interval_seconds or completed_comparisons == total_comparisons):
                     progress_percentage = (completed_comparisons / total_comparisons) * 100 if total_comparisons > 0 else 100
-                    status_callback(f"Comparing: {completed_comparisons:,}/{total_comparisons:,} pairs ({progress_percentage:.1f}%)")
+                    status_callback(f"Comparing: {completed_comparisons:,}/{total_comparisons:,} pairs ({progress_percentage:.1f}%)\n")
                     last_status_update_time = current_time
 
         comparison_results.sort(key=lambda x: x[2], reverse=True)
         print(f"compare_image_tags: Found {len(comparison_results)} pairs above threshold.")
-        if status_callback: status_callback(f"Comparison complete. Found {len(comparison_results)} potential duplicate pairs.")
+        if status_callback: status_callback(f"Comparison complete. Found {len(comparison_results)} potential duplicate pairs.\n")
         return comparison_results
 
 
@@ -667,13 +663,13 @@ class ManageDirectoriesDialog(QDialog):
         self.image_list.clear()
 
         if not comparison_results:
-            self.image_list.addItem("No similar image pairs found above the threshold.")
-            self.updateStatusText.emit("Duplicate detection complete: No pairs found.")
+            self.image_list.addItem("No similar image pairs found above the threshold.\n")
+            self.updateStatusText.emit("Duplicate detection complete: No pairs found.\n")
             return
 
-        self.updateStatusText.emit(f"Duplicate detection complete: Found {len(comparison_results)} pairs. Populating list...")
+        self.updateStatusText.emit(f"Duplicate detection complete: Found {len(comparison_results)} pairs. Populating list...\n")
         for pair_data in comparison_results: self.add_dupe_pair_to_gui(pair_data)
-        self.updateStatusText.emit(f"Duplicate detection complete: Displaying {len(comparison_results)} pairs.")
+        self.updateStatusText.emit(f"Duplicate detection complete: Displaying {len(comparison_results)} pairs.\n")
 
 
     def on_detection_error(self, error_info: tuple):
@@ -685,7 +681,7 @@ class ManageDirectoriesDialog(QDialog):
         self.image_list.clear()
         self.image_list.addItem(f"Error during duplicate detection:\n{exception}")
         QMessageBox.critical(self, "Detection Error", f"An error occurred during duplicate detection:\n{exception}")
-        self.updateStatusText.emit(f"Duplicate detection failed: {exception}")
+        self.updateStatusText.emit(f"Duplicate detection failed: {exception}\n")
 
     def _get_dupe_image_info(self, path: str, thumb_height: int) -> Tuple[Optional[QPixmap], Dict[str, str]]:
         """
@@ -849,10 +845,6 @@ class ManageDirectoriesDialog(QDialog):
             qimage = self.main_window.thumbnail_cache.get_thumbnail(image_id)
             if qimage and not qimage.isNull(): return QPixmap.fromImage(qimage)
         return None
-
-    def update_progress_info(self):
-        """Placeholder for timer-based progress updates if needed."""
-        pass
 
     def set_ui_enabled(self, enabled: bool):
         """Enables or disables relevant UI elements during long operations."""

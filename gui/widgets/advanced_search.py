@@ -20,8 +20,6 @@ class AdvancedSearchPanel(QWidget):
     searchRequested = pyqtSignal(str)
     # Signal emitted when the text or cursor position changes (for triggering suggestion updates)
     inputChanged = pyqtSignal()
-    # Signal emitted when a suggestion is selected
-    suggestionSelected = pyqtSignal(str) # Emits the selected tag text
 
     tagSegmentSelected = pyqtSignal(str) # Emits the fully selected tag segment text
 
