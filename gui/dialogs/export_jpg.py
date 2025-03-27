@@ -1,5 +1,6 @@
 import os
 import math
+import traceback
 from pathlib import Path
 from typing import Optional
 
@@ -12,7 +13,7 @@ from PyQt6.QtCore import Qt, QSize
 from PIL import Image, UnidentifiedImageError
 
 # Import config to potentially get base directory for icon
-from ... import config
+import config
 
 class ExportAsJPGDialog(QDialog):
     """

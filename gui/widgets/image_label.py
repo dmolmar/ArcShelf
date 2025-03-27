@@ -10,8 +10,8 @@ from PyQt6.QtCore import Qt
 # Use TYPE_CHECKING to avoid circular imports for type hints
 if TYPE_CHECKING:
     # Assuming these will be defined in their respective modules later
-    from ..main_window import ImageGallery
-    from ..dialogs.export_jpg import ExportAsJPGDialog
+    from gui.main_window import ImageGallery
+    from dialogs.export_jpg import ExportAsJPGDialog
 
 class ImageLabel(QLabel):
     """

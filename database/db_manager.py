@@ -8,8 +8,8 @@ from PIL import Image
 
 # Use TYPE_CHECKING to avoid circular imports for type hints
 if TYPE_CHECKING:
-    from ..image_processing.thumbnail import ThumbnailCache
-    from ..image_processing.tagger import ImageTaggerModel # Assuming ImageTaggerModel will be in tagger.py
+    from image_processing.thumbnail import ThumbnailCache
+    from image_processing.tagger import ImageTaggerModel # Assuming ImageTaggerModel will be in tagger.py
 
 # Import the data model
 from .models import TagPrediction

@@ -8,7 +8,7 @@ from PIL import Image, UnidentifiedImageError
 
 # Use TYPE_CHECKING to avoid circular import for ThumbnailCache type hint
 if TYPE_CHECKING:
-    from ..image_processing.thumbnail import ThumbnailCache
+    from image_processing.thumbnail import ThumbnailCache
 
 # --- Generic Worker ---
 

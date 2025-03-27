@@ -6,8 +6,8 @@ from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QAction, QPixmap, QResizeEv
 
 # Use TYPE_CHECKING for type hints to avoid circular imports
 if TYPE_CHECKING:
-    from ..main_window import ImageGallery
-    from ...database.models import TagPrediction # For temporary_predictions hint
+    from gui.main_window import ImageGallery
+    from database.models import TagPrediction # For temporary_predictions hint
 
 # Define supported image file extensions
 SUPPORTED_IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.tiff')

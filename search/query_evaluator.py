@@ -7,7 +7,7 @@ from .query_parser import ASTNode, TagNode, AndNode, OrNode, NotNode, BracketNod
 
 # Use TYPE_CHECKING to avoid circular import issues with Database
 if TYPE_CHECKING:
-    from ..database.db_manager import Database
+    from database.db_manager import Database
 
 class SearchQueryEvaluator:
     """

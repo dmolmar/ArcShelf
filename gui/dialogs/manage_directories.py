@@ -17,17 +17,17 @@ from PyQt6.QtGui import QIcon, QPixmap, QImage
 from PIL import Image, UnidentifiedImageError
 
 # Local imports (within the gui package)
-from ..widgets.directory_list_item import DirectoryListItem
+from gui.widgets.directory_list_item import DirectoryListItem
 
 # Imports from other parts of the application package
-from ...database.db_manager import Database
-from ...utils.workers import Worker
+from database.db_manager import Database
+from utils.workers import Worker
 # Assuming config might be needed for paths, etc.
-from ... import config
+import config
 
 # Use TYPE_CHECKING for type hints to avoid circular imports
 if TYPE_CHECKING:
-    from ..main_window import ImageGallery # The main application window
+    from main_window import ImageGallery # The main application window
 
 # Placeholder for utility function - move later
 def human_readable_size(size_bytes: int) -> str:
