@@ -936,29 +936,63 @@ class ImageGallery(QMainWindow):
         self.threadpool.start(worker)
 
     def _filter_paths_for_processing(self, paths: List[str]) -> List[str]:
-        """Checks DB and mod time to find paths needing processing."""
+        """Checks DB (mod time, size) to find paths needing processing."""
         paths_to_process = []
+        print(f"Filtering {len(paths)} potential paths for processing...")
+        checked_count = 0
         try:
              with self.db.lock, sqlite3.connect(self.db.db_path) as conn:
                   cursor = conn.cursor()
                   for img_path in paths:
-                       normalized_path = self.db.normalize_path(img_path)
-                       cursor.execute("SELECT modification_time FROM images WHERE path = ?", (normalized_path,))
-                       result = cursor.fetchone()
-                       needs_processing = True
-                       if result and result[0] is not None:
-                            stored_mod_time = result[0]
-                            try:
-                                 current_mod_time = os.path.getmtime(img_path)
-                                 # Only skip if stored time is valid and not older (allow tolerance)
-                                 if current_mod_time <= stored_mod_time + 1:
-                                      needs_processing = False
-                            except OSError: pass # Process if cannot get current mod time
+                       checked_count += 1
+                       if checked_count % 500 == 0: # Print progress
+                           print(f"  Checked {checked_count}/{len(paths)} paths...")
+
+                       needs_processing = True # Assume needs processing unless proven otherwise
+                       try:
+                            # Get current file info first
+                            current_mod_time = os.path.getmtime(img_path)
+                            current_file_size = os.path.getsize(img_path)
+
+                            # Check database
+                            normalized_path = self.db.normalize_path(img_path)
+                            # --- MODIFICATION HERE: Select size, use COLLATE NOCASE ---
+                            cursor.execute("SELECT modification_time, file_size FROM images WHERE path = ? COLLATE NOCASE", (normalized_path,))
+                            result = cursor.fetchone()
+
+                            if result:
+                                stored_mod_time, stored_file_size = result
+                                # Check if mod time AND size match (within tolerance for time)
+                                time_matches = abs(current_mod_time - stored_mod_time) <= 1 if stored_mod_time is not None else False
+                                size_matches = current_file_size == stored_file_size if stored_file_size is not None else False
+
+                                if time_matches and size_matches:
+                                    needs_processing = False # Skip if both time and size match
+                            # else: image not in DB, needs_processing remains True
+
+                       except FileNotFoundError:
+                            print(f"  Skipping missing file during filter: {img_path}")
+                            needs_processing = False # Cannot process if file doesn't exist
+                       except OSError as e:
+                            print(f"  Error accessing file during filter {img_path}: {e}")
+                            # Decide whether to process or skip on error; skipping is safer
+                            needs_processing = False
+                       except sqlite3.Error as e:
+                            print(f"  DB error during filter for {img_path}: {e}")
+                            # If DB error, assume processing is needed to be safe? Or skip?
+                            # Let's assume processing is needed if DB check fails.
+                            needs_processing = True
+
                        if needs_processing:
                             paths_to_process.append(img_path)
+
         except sqlite3.Error as e:
-             print(f"DB error checking images for processing: {e}")
-             return paths # Process all on DB error
+             print(f"DB error during bulk filter setup: {e}")
+             # On major DB error, maybe process all as a fallback? Or none?
+             # Returning all might lead to excessive processing. Let's return empty.
+             return [] # Return empty list on major DB error
+
+        print(f"Filtering complete. {len(paths_to_process)} paths require processing.")
         return paths_to_process
 
     def process_image_queue(self, image_queue: Queue[str], status_callback: Optional[Callable[[str], None]] = None):

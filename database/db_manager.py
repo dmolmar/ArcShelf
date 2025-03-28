@@ -112,36 +112,47 @@ class Database:
                 resolution = f"{width}x{height}"
         except Exception as e:
             print(f"Error getting resolution for {path}: {e}")
-            # Keep resolution as "unknown"
 
         try:
             with self.lock:
                 with sqlite3.connect(self.db_path) as conn:
                     cursor = conn.cursor()
-                    cursor.execute("SELECT id, modification_time, file_size, resolution FROM images WHERE path = ?", (normalized_path,))
+                    # --- MODIFICATION HERE: Added COLLATE NOCASE ---
+                    cursor.execute("SELECT id, modification_time, file_size, resolution FROM images WHERE path = ? COLLATE NOCASE", (normalized_path,))
+                    # --- END MODIFICATION ---
                     row = cursor.fetchone()
 
                     image_id = None
                     needs_retagging = False
                     needs_thumbnail_update = False
+                    existing_rating = None # Store existing rating if found
 
                     if row:
                         image_id, stored_mod_time, stored_file_size, stored_resolution = row
-                        # Check if file changed significantly or resolution was unknown
-                        if (stored_mod_time != current_mod_time or
-                            stored_file_size != current_file_size or
-                            stored_resolution != resolution):
-                            print(f"Updating metadata for existing image: {normalized_path}")
+                        # --- Get existing rating ---
+                        cursor.execute("SELECT rating FROM images WHERE id = ?", (image_id,))
+                        rating_row = cursor.fetchone()
+                        existing_rating = rating_row[0] if rating_row else None
+                        # --- End Get existing rating ---
+
+                        # Check if file changed significantly or resolution was unknown/changed
+                        # Using a tolerance for mod_time comparison
+                        mod_time_changed = abs(current_mod_time - stored_mod_time) > 1 if stored_mod_time else True
+                        size_changed = stored_file_size != current_file_size
+                        resolution_changed = stored_resolution != resolution
+
+                        if mod_time_changed or size_changed or resolution_changed:
+                            print(f"Updating metadata for existing image: {normalized_path} (ModTime:{mod_time_changed}, Size:{size_changed}, Res:{resolution_changed})")
                             cursor.execute("UPDATE images SET file_size = ?, modification_time = ?, resolution = ? WHERE id = ?",
                                            (current_file_size, current_mod_time, resolution, image_id))
-                            needs_retagging = True # Re-tag if file changed
+                            needs_retagging = True # Re-tag if file changed (metadata or content)
                             needs_thumbnail_update = True
-                        # Check if thumbnail is missing or invalid even if file metadata matches
+                        # Check if thumbnail is missing/invalid even if file metadata matches
                         elif not self.thumbnail_cache.is_thumbnail_valid(image_id):
                              needs_thumbnail_update = True
 
                     else:
-                        # Image is new
+                        # Image is new (or wasn't found due to previous case-sensitivity issue)
                         print(f"Adding new image: {normalized_path}")
                         rating = model.determine_rating(predictions) # Determine rating for new image
                         image_id = str(uuid.uuid4())
@@ -153,20 +164,17 @@ class Database:
                     # Perform retagging if needed
                     if needs_retagging and image_id:
                         print(f"Updating tags for image: {image_id}")
-                        # Determine rating (could be re-determined even for existing images if logic changes)
                         determined_rating = model.determine_rating(predictions)
                         # Update rating in DB if it changed or was newly determined
-                        if not row or (row and row[2] != determined_rating): # row[2] would be stored rating if exists
+                        if existing_rating != determined_rating: # Check against stored or initial None
                              cursor.execute("UPDATE images SET rating = ? WHERE id = ?", (determined_rating, image_id))
 
                         # Delete old tags before adding new ones
                         cursor.execute("DELETE FROM image_tags WHERE image_id = ?", (image_id,))
 
-                        # Filter predictions: keep only the determined rating tag, plus all non-rating tags
-                        # This assumes rating tags are exclusively in the 'rating' category
+                        # Filter predictions... (rest of tagging logic remains the same)
                         filtered_predictions = [pred for pred in predictions if pred.category.lower() != "rating" or pred.tag.lower() == determined_rating.lower()]
 
-                        tags_to_insert = []
                         tag_ids_map = {} # Cache tag IDs to reduce queries
 
                         # Get existing tags first to minimize inserts
@@ -181,35 +189,25 @@ class Database:
                         image_tags_to_insert = []
                         for pred in filtered_predictions:
                             if pred.tag not in tag_ids_map:
-                                # Insert tag if it doesn't exist
                                 try:
                                     cursor.execute("INSERT OR IGNORE INTO tags (name, category) VALUES (?, ?)", (pred.tag, pred.category))
-                                    # Fetch the ID of the newly inserted or existing tag
                                     cursor.execute("SELECT id FROM tags WHERE name = ?", (pred.tag,))
                                     tag_id_row = cursor.fetchone()
-                                    if tag_id_row:
-                                        tag_ids_map[pred.tag] = tag_id_row[0]
-                                    else:
-                                         print(f"Warning: Could not get tag_id for tag '{pred.tag}' after insert.")
-                                         continue # Skip adding this image_tag link if tag ID is missing
-                                except sqlite3.IntegrityError: # Handle rare race conditions if needed
+                                    if tag_id_row: tag_ids_map[pred.tag] = tag_id_row[0]
+                                    else: print(f"Warning: Could not get tag_id for tag '{pred.tag}' after insert."); continue
+                                except sqlite3.IntegrityError:
                                      print(f"Integrity error inserting tag '{pred.tag}', likely already exists.")
                                      cursor.execute("SELECT id FROM tags WHERE name = ?", (pred.tag,))
                                      tag_id_row = cursor.fetchone()
-                                     if tag_id_row:
-                                         tag_ids_map[pred.tag] = tag_id_row[0]
-                                     else:
-                                         print(f"Warning: Could not get tag_id for tag '{pred.tag}' after integrity error.")
-                                         continue
+                                     if tag_id_row: tag_ids_map[pred.tag] = tag_id_row[0]
+                                     else: print(f"Warning: Could not get tag_id for tag '{pred.tag}' after integrity error."); continue
 
-
-                            # Add to image_tags list if tag_id was found/created
                             if pred.tag in tag_ids_map:
                                 image_tags_to_insert.append((image_id, tag_ids_map[pred.tag], pred.confidence))
 
-                        # Bulk insert image-tag relationships
                         if image_tags_to_insert:
                             cursor.executemany("INSERT INTO image_tags (image_id, tag_id, confidence) VALUES (?, ?, ?)", image_tags_to_insert)
+
 
                     # Update thumbnail if needed
                     if needs_thumbnail_update and image_id:
