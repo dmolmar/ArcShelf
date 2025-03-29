@@ -1,4 +1,3 @@
-import os
 import threading
 from pathlib import Path
 from typing import Optional, Dict
@@ -9,7 +8,6 @@ from PyQt6.QtGui import QImage
 THUMBNAIL_HEIGHT = 400
 # Define cache settings
 MEMORY_CACHE_MAXSIZE = 100 # Increased memory cache size
-DISK_CACHE_MAXSIZE = 5000 # Limit disk cache tracking if needed, though less critical than memory
 WEBP_QUALITY = 85 # Quality for saved WEBP thumbnails
 
 class ThumbnailCache:
@@ -162,17 +160,3 @@ class ThumbnailCache:
         with self.cache_lock:
             self.memory_cache.clear()
         print("Memory thumbnail cache cleared.")
-
-    # Optional: Method to clear disk cache (use with caution)
-    # def clear_disk_cache(self):
-    #     """Deletes all files in the thumbnail cache directory."""
-    #     print(f"Clearing disk cache directory: {self.cache_dir}")
-    #     with self.cache_lock: # Ensure consistency with memory cache clearing
-    #         self.memory_cache.clear()
-    #         for item in self.cache_dir.iterdir():
-    #             if item.is_file():
-    #                 try:
-    #                     item.unlink()
-    #                 except OSError as e:
-    #                     print(f"Error deleting file {item}: {e}")
-    #     print("Disk thumbnail cache cleared.")

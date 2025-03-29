@@ -91,19 +91,12 @@ class SearchQueryParser:
         }
         # --- END NEW ---
 
-        # --- REMOVED: Old regex-based token specification and get_token ---
-        # self.token_specification = [...]
-        # self.tok_regex = ...
-        # self.get_token = ...
-        # --- END REMOVED ---
-
     # --- NEW: Non-regex based tokenizer ---
     def tokenize(self, query: str) -> List[Token]:
         """
         Converts the input query string into a list of tokens based on
         AND, OR, NOT, [, ] as delimiters.
         """
-        print(f"SearchQueryParser: Tokenizing query: '{query}'") # Debug
         self.tokens = []
         pos = 0
         query_len = len(query)
@@ -151,7 +144,6 @@ class SearchQueryParser:
                 # The last tag (if any) was added in step 3.
                 pos = query_len
 
-        print(f"SearchQueryParser: Tokens generated: {self.tokens}") # Debug
         return self.tokens
     # --- END NEW ---
 
@@ -162,12 +154,10 @@ class SearchQueryParser:
             self.current_token = self.tokens.pop(0)
         else:
             self.current_token = None # End of tokens
-        # print(f"SearchQueryParser: Next token: {self.current_token}") # Debug
 
     # (Keep parse method as is)
     def parse(self, query: str) -> ASTNode:
         """Parses the tokenized query into an AST."""
-        print(f"SearchQueryParser: Parsing query: '{query}'") # Debug
         if not query.strip():
              return AllImagesNode()
 
@@ -183,13 +173,11 @@ class SearchQueryParser:
             raise ValueError(f"Unexpected token at end of query: Token('{self.current_token.type}', '{self.current_token.value}')")
 
 
-        print(f"SearchQueryParser: Parsed AST: {result!r}") # Debug
         return result
 
     # --- Recursive Descent Parsing Methods ---
     # (Keep parse_expression and parse_term as is)
     def parse_expression(self) -> ASTNode:
-        # print("SearchQueryParser: Parsing expression") # Debug
         node = self.parse_term()
         while self.current_token and self.current_token.type == 'OR':
             self.next_token()
@@ -198,7 +186,6 @@ class SearchQueryParser:
         return node
 
     def parse_term(self) -> ASTNode:
-        # print("SearchQueryParser: Parsing term") # Debug
         node = self.parse_factor()
         while self.current_token and self.current_token.type == 'AND':
             self.next_token()
@@ -208,7 +195,6 @@ class SearchQueryParser:
 
     # (Slightly simplify parse_factor as QUOTED_TAG is gone)
     def parse_factor(self) -> ASTNode:
-        # print("SearchQueryParser: Parsing factor") # Debug
         token = self.current_token
 
         if token is None:
@@ -233,58 +219,9 @@ class SearchQueryParser:
         # --- CHANGE: Only handle 'TAG' now ---
         elif token.type == 'TAG':
             tag_value = token.value # Value already stripped by tokenizer
-            print(f"SearchQueryParser: Found Tag: '{tag_value}'") # Debug
             self.next_token()
             return TagNode(tag_value)
         # --- END CHANGE ---
         else:
             # Include token details in the error
             raise ValueError(f"Invalid syntax: Unexpected token Token('{token.type}', '{token.value}')")
-
-
-# --- Example Usage (for testing) ---
-# (Keep __main__ block as is for testing)
-if __name__ == '__main__':
-    parser = SearchQueryParser()
-    queries = [
-        "tag1",
-        "arcueid brunestud", # Multi-word tag
-        "tag1 AND tag2",
-        "arcueid brunestud AND 1girl", # Multi-word tag with AND
-        "tag1 OR tag2",
-        "blue sky OR rainy day", # Multi-word tags with OR
-        "NOT tag1",
-        "NOT long tag with spaces", # Multi-word tag with NOT
-        "tag1 AND NOT tag2",
-        "simple tag AND NOT another complex tag with spaces",
-        "NOT tag1 OR tag2", # NOT applies only to tag1 here
-        "[tag1 OR tag2] AND tag3",
-        "[simple tag OR another long tag] AND third tag",
-        "NOT [tag1 AND tag2]",
-        "NOT [complex tag AND another one]",
-        "tag1 AND [tag2 OR NOT tag3]",
-        "first tag AND [second tag OR NOT third tag with space]",
-        "complex-tag:value AND another_tag",
-        "tag with [bracket] inside", # Brackets inside tags are now part of the tag
-        "tag with AND inside", # AND inside tags is now part of the tag
-        "", # Empty query
-        "   ", # Whitespace query
-        # Error cases (some might behave differently now)
-        # "tag1 AND", # Should still raise error (unexpected end)
-        # "OR tag1", # Should raise error (unexpected OR)
-        # "[tag1 OR tag2", # Should raise error (unmatched bracket)
-        # "tag1 ]", # Should raise error (unexpected bracket)
-        # "tag1 tag2", # This will now be parsed as a *single* tag "tag1 tag2" - CORRECT according to new rules
-    ]
-
-    for q in queries:
-        print(f"\nQuery: '{q}'")
-        try:
-            ast = parser.parse(q)
-            print(f"AST: {ast!r}")
-        except ValueError as e:
-            print(f"Error parsing query: {e}")
-        except Exception as e:
-             print(f"Unexpected Error: {e}")
-             import traceback
-             traceback.print_exc()

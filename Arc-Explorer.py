@@ -5,8 +5,6 @@ from pathlib import Path
 # Ensure the 'arc_explorer' package directory is in the Python path
 # This might not be strictly necessary if running from the project root,
 # but it helps ensure imports work correctly.
-# project_root = Path(__file__).parent
-#sys.path.insert(0, str(project_root))
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtGui import QIcon, QImageReader

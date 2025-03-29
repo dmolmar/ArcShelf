@@ -8,8 +8,6 @@ from PyQt6.QtCore import pyqtSignal, Qt, QTimer, QEvent, QObject, pyqtSlot
 from PyQt6.QtGui import QFocusEvent
 
 # Use TYPE_CHECKING for type hints if needed, though direct parent dependency is removed
-# if TYPE_CHECKING:
-#     from ..main_window import ImageGallery
 
 class AdvancedSearchPanel(QWidget):
     """

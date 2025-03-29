@@ -14,13 +14,13 @@ from collections import defaultdict
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QFileDialog, QVBoxLayout, QWidget,
-    QLabel, QScrollArea, QHBoxLayout, QFrame, QStyle, QDialog, QComboBox,
+    QLabel, QScrollArea, QHBoxLayout, QFrame, QDialog, QComboBox, # Removed QStyle
     QSlider, QSpinBox, QSplitter, QTextEdit, QLineEdit, QListWidget, # Add QListWidget
-    QSizePolicy, QAbstractItemView, QMessageBox, QMenu, QDoubleSpinBox,
+    QSizePolicy, QAbstractItemView, QMessageBox, QMenu, # Removed QDoubleSpinBox
     QCheckBox, QListWidgetItem # Add QListWidgetItem
 )
 from PyQt6.QtGui import (
-    QPixmap, QImageReader, QDragEnterEvent, QDropEvent, QShortcut, QImage,
+    QPixmap, QDragEnterEvent, QDropEvent, QShortcut, # Removed QImageReader, QImage
     QIcon, QTextCursor, QAction, QKeyEvent
 )
 from PyQt6.QtCore import (

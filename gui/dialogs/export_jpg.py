@@ -138,14 +138,6 @@ class ExportAsJPGDialog(QDialog):
         # --- Export Button ---
         export_btn = QPushButton("Export", self)
         export_btn.clicked.connect(self.export)
-        # Add a cancel button maybe? Standard dialogs often have OK/Cancel
-        # cancel_btn = QPushButton("Cancel", self)
-        # cancel_btn.clicked.connect(self.reject)
-        # button_layout = QHBoxLayout()
-        # button_layout.addStretch()
-        # button_layout.addWidget(cancel_btn)
-        # button_layout.addWidget(export_btn)
-        # layout.addLayout(button_layout)
         layout.addWidget(export_btn, alignment=Qt.AlignmentFlag.AlignRight) # Simpler for now
 
         self.setLayout(layout)
@@ -185,10 +177,6 @@ class ExportAsJPGDialog(QDialog):
         if not output_path:
             QMessageBox.warning(self, "Input Error", "Please select or enter an output file path.")
             return
-
-        # Ensure output directory exists (optional, QFileDialog usually handles this)
-        # output_dir = Path(output_path).parent
-        # output_dir.mkdir(parents=True, exist_ok=True)
 
         quality = self.quality_slider.value()
 
@@ -230,21 +218,3 @@ class ExportAsJPGDialog(QDialog):
             traceback.print_exc() # Print full traceback to console for debugging
             QMessageBox.critical(self, "Export Error", error_message)
             # Do not close the dialog on error, let the user retry or cancel
-
-# Example usage (for testing standalone)
-if __name__ == '__main__':
-    import sys
-    from PyQt6.QtWidgets import QApplication
-
-    # Create a dummy image path for testing
-    # Replace with a real image path on your system
-    test_image_path = "path/to/your/test_image.png" # CHANGE THIS
-
-    if not Path(test_image_path).is_file():
-         print(f"Please update 'test_image_path' in the example usage section of export_jpg.py to a valid image file.")
-    else:
-        app = QApplication(sys.argv)
-        # Pass None as parent if running standalone
-        dialog = ExportAsJPGDialog(None, test_image_path)
-        dialog.show()
-        sys.exit(app.exec())

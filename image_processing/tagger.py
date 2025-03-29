@@ -55,8 +55,7 @@ class ImageTaggerModel:
                  print(f"Error during WaifuTagger unload_model: {e}")
             finally:
                  self.tagger = None
-                 # import gc # Optional: Force garbage collection if memory issues persist
-                 # gc.collect()
+                 # Optional: Force garbage collection if memory issues persist
                  print("WaifuTagger model unloaded.")
 
 

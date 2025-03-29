@@ -11,7 +11,7 @@ from PyQt6.QtCore import Qt
 if TYPE_CHECKING:
     # Assuming these will be defined in their respective modules later
     from gui.main_window import ImageGallery
-    from dialogs.export_jpg import ExportAsJPGDialog
+    # from dialogs.export_jpg import ExportAsJPGDialog # Removed, imported locally
 
 class ImageLabel(QLabel):
     """

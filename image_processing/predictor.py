@@ -1,5 +1,4 @@
 import sys
-import os
 import numpy as np
 import onnxruntime as rt
 import pandas as pd
@@ -141,8 +140,6 @@ class WaifuTagger:
             # self.providers = None
             print("Model unloaded.")
             # Consider adding gc.collect() if memory issues persist
-            # import gc
-            # gc.collect()
 
     def prepare_image(self, image: Image.Image) -> np.ndarray:
         """Prepare image for model inference."""
@@ -304,74 +301,3 @@ class WaifuTagger:
             character_res = None # Return None if no characters meet threshold
 
         return general_res, ratings, character_res
-
-# Example usage block (updated to use config)
-if __name__ == "__main__":
-    # Use paths from config
-    model_path = config.MODEL_PATH
-    csv_path = config.TAGS_CSV_PATH
-
-    print(f"Running example usage for predictor.py")
-    print(f"Model Path: {model_path}")
-    print(f"CSV Path: {csv_path}")
-
-    if not model_path.is_file():
-        print(f"Error: Model file not found at {model_path}")
-        sys.exit(1)
-
-    if not csv_path.is_file():
-        print(f"Error: CSV file not found at {csv_path}")
-        sys.exit(1)
-
-    try:
-        # Initialize tagger using config paths
-        tagger = WaifuTagger(model_path=str(model_path), csv_path=str(csv_path), use_gpu=True) # Or False based on preference
-
-        # Example usage: Load an image and predict tags
-        # Create a dummy image path for demonstration if needed, or use a known test image
-        # Ensure you have a test image available or handle the FileNotFoundError
-        image_path = config.BASE_DIR / "test_image.jpg" # Example path, replace with a real test image path relative to base dir
-        print(f"Attempting to load test image: {image_path}")
-
-        if not image_path.is_file():
-            print(f"Warning: Test image file not found at {image_path}. Skipping prediction example.")
-            # Optionally create a dummy image for testing purposes
-            # try:
-            #     dummy_image = Image.new('RGB', (60, 30), color = 'red')
-            #     dummy_image.save(image_path)
-            #     print(f"Created dummy test image at {image_path}")
-            # except Exception as img_err:
-            #     print(f"Could not create dummy image: {img_err}")
-            #     sys.exit(1)
-        else:
-            try:
-                image = Image.open(image_path)
-                print("Test image loaded.")
-
-                # Perform prediction
-                print("Performing prediction...")
-                general_tags, rating, characters = tagger.predict(image)
-
-                print("\n--- Prediction Results ---")
-                print("General Tags:", general_tags)
-                print("Rating:", rating)
-                print("Characters:", characters)
-                print("--------------------------\n")
-
-            except FileNotFoundError:
-                 print(f"Error: Image file not found at {image_path}")
-                 sys.exit(1)
-            except Exception as pred_e:
-                 print(f"An error occurred during prediction: {pred_e}")
-                 sys.exit(1)
-
-        # Unload the model explicitly if needed
-        print("Unloading model...")
-        tagger.unload_model()
-        print("Example usage finished.")
-
-    except Exception as e:
-        print(f"An error occurred during tagger initialization or example execution: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)

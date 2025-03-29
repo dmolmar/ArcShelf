@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QPointF, QRectF, QSize
 from PyQt6.QtGui import (
     QDragEnterEvent, QDropEvent, QAction, QPixmap, QResizeEvent, QWheelEvent,
-    QMouseEvent, QPainter, QColor, QPen, QBrush
+    QMouseEvent, QPainter, QColor # Removed QBrush, QPen
 )
 
 # Use TYPE_CHECKING for type hints to avoid circular imports

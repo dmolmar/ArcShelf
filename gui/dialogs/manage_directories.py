@@ -4,7 +4,6 @@ import os
 import sys
 import sqlite3
 import datetime
-import traceback
 import math
 from typing import TYPE_CHECKING, Set, List, Tuple, Optional, Dict, Callable
 from pathlib import Path
@@ -12,7 +11,7 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QSplitter, QWidget, QListWidget,
     QPushButton, QLineEdit, QCheckBox, QSpinBox, QFileDialog, QMessageBox,
-    QListWidgetItem, QAbstractItemView, QLabel, QApplication, QSizePolicy,
+    QListWidgetItem, QAbstractItemView, QLabel, QApplication, # Removed QSizePolicy
     QFrame # Import QFrame
 )
 from PyQt6.QtCore import Qt, QTimer, QThreadPool, QSize, pyqtSignal
@@ -814,29 +813,6 @@ class ManageDirectoriesDialog(QDialog):
         list_item.setData(Qt.ItemDataRole.UserRole, {"path1": path1, "path2": path2})
         self.image_list.addItem(list_item)
         self.image_list.setItemWidget(list_item, list_item_widget)
-
-    def populate_dupe_section(self, thumb_label: QLabel, info_label: QLabel, path: str, thumb_height: int):
-        """Helper to load thumbnail and info for one image in a duplicate pair."""
-        image_id = self.db.get_image_id_from_path(path)
-        pixmap = self.get_cached_thumbnail(image_id) if image_id else None
-        if pixmap: thumb_label.setPixmap(pixmap.scaledToHeight(thumb_height, Qt.TransformationMode.SmoothTransformation))
-        else: thumb_label.setText("No Thumb")
-
-        info_text = f"{os.path.basename(path)}\n"; res_str = "N/A"
-        try:
-            if Path(path).is_file():
-                 size = os.path.getsize(path); mod_time = os.path.getmtime(path)
-                 date_str = datetime.datetime.fromtimestamp(mod_time).strftime('%Y-%m-%d %H:%M')
-                 try: # Use DB resolution if available, faster
-                      db_res = self.db.get_resolutions_for_paths([path]).get(path)
-                      if db_res: res_str = db_res
-                      else: # Fallback to PIL if not in DB (or error)
-                           with Image.open(path) as img: res_str = f"{img.width}x{img.height}"
-                 except Exception: pass # Ignore PIL errors if DB failed
-                 info_text += f"{human_readable_size(size)}, {res_str}, {date_str}"
-            else: info_text += "(File not found)"
-        except Exception as e: print(f"Error getting info for {path}: {e}"); info_text += "(Error getting info)"
-        info_label.setText(info_text)
 
 
     def get_cached_thumbnail(self, image_id: Optional[str]) -> Optional[QPixmap]:

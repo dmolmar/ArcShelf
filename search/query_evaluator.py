@@ -1,5 +1,4 @@
 import sqlite3
-import os
 from typing import Set, TYPE_CHECKING
 
 # Import AST node types from the parser module
@@ -23,11 +22,9 @@ class SearchQueryEvaluator:
             selected_directories: A set of normalized directory paths currently active.
                                    Used to scope the search (especially for NOT queries).
         """
-        # print("SearchQueryEvaluator: Initializing") # Optional debug
         self.db = db
         # Store normalized selected directories
         self.selected_directories = {self.db.normalize_path(d) for d in selected_directories}
-        # print(f"Evaluator using directories: {self.selected_directories}") # Optional debug
 
     def evaluate(self, node: ASTNode) -> Set[str]:
         """
@@ -39,22 +36,18 @@ class SearchQueryEvaluator:
         Returns:
             A set of image IDs matching the query represented by the node.
         """
-        # print(f"SearchQueryEvaluator: Evaluating node: {node!r}") # Optional debug
         result: Set[str] = set()
 
         if isinstance(node, TagNode):
-            # print(f"SearchQueryEvaluator: Handling TagNode with tag: {node.tag}") # Optional debug
             result = self.get_image_ids_by_tag(node.tag)
             # Filter results by selected directories *after* getting them by tag
             result = self.filter_by_directory_scope(result)
 
         elif isinstance(node, AllImagesNode):
-            # print("SearchQueryEvaluator: Handling AllImagesNode") # Optional debug
             # Returns all images within the selected directories scope
             result = self.get_all_image_ids_in_scope()
 
         elif isinstance(node, AndNode):
-            # print("SearchQueryEvaluator: Handling AndNode") # Optional debug
             left_set = self.evaluate(node.left)
             # Optimization: If left set is empty, intersection will be empty
             if not left_set:
@@ -62,39 +55,31 @@ class SearchQueryEvaluator:
             else:
                 right_set = self.evaluate(node.right)
                 result = left_set.intersection(right_set)
-            # print(f"SearchQueryEvaluator: AndNode result size: {len(result)}") # Optional debug
 
         elif isinstance(node, OrNode):
-            # print("SearchQueryEvaluator: Handling OrNode") # Optional debug
             left_set = self.evaluate(node.left)
             right_set = self.evaluate(node.right)
             result = left_set.union(right_set)
-            # print(f"SearchQueryEvaluator: OrNode result size: {len(result)}") # Optional debug
 
         elif isinstance(node, NotNode):
-            # print("SearchQueryEvaluator: Handling NotNode") # Optional debug
             # Get all images within the current scope (selected directories)
             all_in_scope = self.get_all_image_ids_in_scope()
             # Evaluate the node to be excluded
             excluded_set = self.evaluate(node.node)
             # Result is all images in scope minus the excluded ones
             result = all_in_scope - excluded_set
-            # print(f"SearchQueryEvaluator: NotNode result size: {len(result)}") # Optional debug
 
         elif isinstance(node, BracketNode):
             # Brackets primarily affect parsing order, evaluation just processes the inner expression
-            # print("SearchQueryEvaluator: Handling BracketNode") # Optional debug
             result = self.evaluate(node.expression)
 
         else:
             raise ValueError(f"Unknown AST node type during evaluation: {type(node)}")
 
-        # print(f"SearchQueryEvaluator: Evaluation result size: {len(result)}") # Optional debug
         return result
 
     def get_image_ids_by_tag(self, tag: str) -> Set[str]:
         """Retrieves image IDs associated with a specific tag from the database."""
-        # print(f"SearchQueryEvaluator: Getting image IDs by tag: '{tag}'") # Optional debug
         try:
             with self.db.lock: # Use the database's lock
                 # Use a single connection for potentially multiple operations if needed
@@ -109,7 +94,6 @@ class SearchQueryEvaluator:
                         WHERE t.name = ?
                     """, (tag,))
                     result = {row[0] for row in cursor.fetchall()}
-            # print(f"SearchQueryEvaluator: Image IDs found for tag '{tag}': {len(result)}") # Optional debug
             return result
         except sqlite3.Error as e:
             print(f"Database error getting images by tag '{tag}': {e}")
@@ -117,9 +101,7 @@ class SearchQueryEvaluator:
 
     def get_all_image_ids_in_scope(self) -> Set[str]:
         """Retrieves all image IDs within the currently selected directories."""
-        # print("SearchQueryEvaluator: Getting all image IDs in scope") # Optional debug
         if not self.selected_directories:
-            # print("SearchQueryEvaluator: No directories selected, returning empty set.") # Optional debug
             return set()
 
         try:
@@ -140,7 +122,6 @@ class SearchQueryEvaluator:
 
                     cursor.execute(query, params)
                     result = {row[0] for row in cursor.fetchall()}
-            # print(f"SearchQueryEvaluator: All image IDs in scope: {len(result)}") # Optional debug
             return result
         except sqlite3.Error as e:
             print(f"Database error getting all image IDs in scope: {e}")
@@ -153,7 +134,6 @@ class SearchQueryEvaluator:
          if not self.selected_directories or not image_ids:
              return image_ids # No filtering needed or possible
 
-         # print(f"Filtering {len(image_ids)} IDs by directory scope...") # Optional debug
          try:
              with self.db.lock:
                  with sqlite3.connect(self.db.db_path) as conn:
@@ -176,7 +156,6 @@ class SearchQueryEvaluator:
 
                      cursor.execute(query, final_params)
                      filtered_ids = {row[0] for row in cursor.fetchall()}
-             # print(f"Filtered IDs count: {len(filtered_ids)}") # Optional debug
              return filtered_ids
          except sqlite3.Error as e:
              print(f"Database error filtering by directory scope: {e}")

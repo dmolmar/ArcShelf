@@ -30,7 +30,7 @@ class Database:
         # Use a reentrant lock to allow the same thread to acquire the lock multiple times
         self.lock = threading.RLock()
         self._init_db()
-        print(f"Database initialized at: {self.db_path}")
+        # print(f"Database initialized at: {self.db_path}") # Removed debug print
 
     def _init_db(self):
         """Initializes the database schema if it doesn't exist."""
@@ -68,11 +68,8 @@ class Database:
                     cursor.execute("CREATE INDEX IF NOT EXISTS idx_image_tags_tag_id ON image_tags(tag_id)")
                     cursor.execute("CREATE INDEX IF NOT EXISTS idx_images_modification_time ON images(modification_time)")
                     # Consider adding indexes for rating, file_size, resolution if frequently searched/sorted
-                    # cursor.execute("CREATE INDEX IF NOT EXISTS idx_images_rating ON images(rating)")
-                    # cursor.execute("CREATE INDEX IF NOT EXISTS idx_images_file_size ON images(file_size)")
-                    # cursor.execute("CREATE INDEX IF NOT EXISTS idx_images_resolution ON images(resolution)")
                     conn.commit()
-            print("Database schema initialized/verified.")
+            # print("Database schema initialized/verified.") # Removed debug print
         except sqlite3.Error as e:
             print(f"Database initialization error: {e}")
             raise
@@ -265,7 +262,7 @@ class Database:
 
     def cleanup_database(self):
         """Removes records for images that no longer exist on the filesystem."""
-        print("Starting database cleanup...")
+        # print("Starting database cleanup...") # Removed debug print
         image_ids_to_delete = []
         try:
             with self.lock:
@@ -273,7 +270,7 @@ class Database:
                     cursor = conn.cursor()
                     cursor.execute("SELECT id, path FROM images")
                     rows = cursor.fetchall()
-                    print(f"Checking {len(rows)} images for existence...")
+                    # print(f"Checking {len(rows)} images for existence...") # Removed debug print
                     for image_id, db_path in rows:
                         # Use BASE_DIR from config if paths are relative, otherwise assume absolute
                         # Assuming paths stored are absolute or resolvable from CWD
@@ -315,7 +312,7 @@ class Database:
         Vacuums the database to potentially reduce file size and optimize structure.
         This operation can be slow and locks the database.
         """
-        print("Starting database VACUUM operation...")
+        # print("Starting database VACUUM operation...") # Removed debug print
         try:
             # VACUUM needs exclusive access, run outside the main lock if possible,
             # or ensure no other operations are happening.
