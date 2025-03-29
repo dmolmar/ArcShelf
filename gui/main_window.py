@@ -68,7 +68,6 @@ def human_readable_size(size_bytes: Optional[int]) -> str:
 class ImageGallery(QMainWindow):
     # Define signals used for cross-thread communication or decoupling
     thumbnailLoaded = pyqtSignal(str, QPixmap) # image_id (str UUID), pixmap
-    imageLoadedSignal = pyqtSignal(QPixmap) # pixmap for drag-drop area
     imageAnalysisSignal = pyqtSignal(str) # info_text
     imageInfoSignal = pyqtSignal(str, str) # info_text, img_path
     requestImageAnalysis = pyqtSignal(str) # Emit image path (str)
@@ -343,7 +342,6 @@ class ImageGallery(QMainWindow):
         if app_instance:
              app_instance.aboutToQuit.connect(self.unload_model_safely)
 
-        self.imageLoadedSignal.connect(self.set_drag_drop_pixmap)
         self.imageAnalysisSignal.connect(self.update_info_text)
         self.imageInfoSignal.connect(self.update_info_text_with_path)
         self.updateInfoTextSignal.connect(self.update_info_text)
@@ -655,64 +653,46 @@ class ImageGallery(QMainWindow):
         self.process_image_info(img_path, analyze=analyze)
 
     @pyqtSlot(str)
-    def display_image_in_preview(self, img_path: str, target_label: Optional[QLabel] = None):
-        target = target_label or self.drag_drop_area
+    def display_image_in_preview(self, img_path: str, target_label: Optional[QWidget] = None): # target_label optional now
+        """Loads the image in a worker and sets it in the DragDropArea."""
+        # If a target_label is passed AND it's our DragDropArea, use it. Otherwise, use self.drag_drop_area.
+        # This maintains compatibility if the method was called elsewhere, but primarily targets self.drag_drop_area.
+        target_view = self.drag_drop_area if target_label is None or target_label == self.drag_drop_area else None
+
+        if not target_view:
+             print("ImageGallery: display_image_in_preview - Invalid target.")
+             return
+
         print(f"ImageGallery: Displaying image in preview target: {img_path}")
-        target.setText("Loading...")
-        def load_and_display():
+        # Optionally show "Loading..." text (though set_image handles placeholder)
+        # target_view.set_image(None) # Clear previous and show placeholder
+
+        def load_and_display_task():
             try:
+                # Load using QPixmap for direct use in QGraphicsView
                 pixmap = QPixmap(img_path)
-                if not pixmap.isNull():
-                    self.imageLoadedSignal.emit(pixmap) # Emit unscaled pixmap
-                else:
-                    print(f"ImageGallery: Could not load image: {img_path}")
-                    self.imageLoadedSignal.emit(QPixmap())
+                # Return the pixmap (or None if loading failed)
+                return pixmap
             except Exception as e:
                 print(f"Error loading image for preview {img_path}: {e}")
-                self.imageLoadedSignal.emit(QPixmap())
-        worker = Worker(load_and_display)
-        self.threadpool.start(worker)
+                return None # Return None on error
 
-    @pyqtSlot(QPixmap)
-    def set_drag_drop_pixmap(self, pixmap: QPixmap):
-        """Sets the pixmap in the DragDropArea, scaling it to fit within the borders."""
-        target_label = self.drag_drop_area # Reference to the DragDropArea instance
-
-        if pixmap.isNull():
-            target_label.setText("Image could not be loaded.")
-            target_label.setPixmap(QPixmap())
-            target_label._original_pixmap = None
-        else:
-            target_label._original_pixmap = pixmap
-            # --- NEW: Define offsets to account for the border ---
-            # Border is 1px, so offset is 2px total (1px left + 1px right, 1px top + 1px bottom)
-            border_width = 2 # The width of the border defined in the stylesheet
-            width_offset = border_width * 2
-            height_offset = border_width * 2
-            # --- END NEW ---
-
-            label_size = target_label.size()
-
-            # --- CHANGE: Calculate available size by subtracting offsets ---
-            available_width = max(1, label_size.width() - width_offset) # Ensure at least 1 pixel
-            available_height = max(1, label_size.height() - height_offset) # Ensure at least 1 pixel
-            available_size = QSize(available_width, available_height)
-            # --- END CHANGE ---
-
-            if available_size.width() <= 0 or available_size.height() <= 0:
-                # This case is less likely now with max(1, ...), but good to keep
-                print(f"Warning: DragDropArea available size for image is invalid ({available_size}), cannot scale pixmap yet.")
-                # Set unscaled pixmap as a fallback, label's alignment will center it.
-                scaled_pixmap = pixmap
+        def handle_load_result(pixmap_result: Optional[QPixmap]):
+            if target_view: # Check if target_view is still valid
+                if pixmap_result and not pixmap_result.isNull():
+                    target_view.set_image(pixmap_result)
+                else:
+                    print(f"ImageGallery: Could not load image: {img_path}")
+                    target_view.set_image(None) # Show placeholder on failure
             else:
-                # Scale the original pixmap to fit within the calculated available size
-                scaled_pixmap = pixmap.scaled(
-                    available_size, # Use the size adjusted for border offsets
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation
-                )
+                 print("ImageGallery: Target view no longer valid after image load.")
 
-            target_label.setPixmap(scaled_pixmap)
+        worker = Worker(load_and_display_task)
+        # Connect the worker's finished signal to handle the result
+        worker.signals.finished.connect(handle_load_result)
+        # Optionally connect error signal for more specific error handling
+        # worker.signals.error.connect(...)
+        self.threadpool.start(worker)
 
     def process_image_info(self, img_path: str, analyze: bool, store_temp_predictions_callback: Optional[Callable] = None):
         """
