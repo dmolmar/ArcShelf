@@ -1630,7 +1630,18 @@ class ImageGallery(QMainWindow):
             try:
                 if sort_by == 'Date': sort_key_func = lambda p: Path(p).stat().st_mtime
                 elif sort_by == 'File Size': sort_key_func = lambda p: Path(p).stat().st_size
-                elif sort_by == 'Resolution': sort_key_func = self.get_image_pixels
+                elif sort_by == 'Resolution':
+                    # Use pre-fetched resolution data instead of opening files
+                    def get_pixels_from_cache(p: str) -> int:
+                        res_str = self.image_resolutions.get(p)
+                        if res_str and 'x' in res_str:
+                            try:
+                                width_str, height_str = res_str.split('x', 1)
+                                return int(width_str) * int(height_str)
+                            except (ValueError, TypeError):
+                                return 0 # Default for invalid format
+                        return 0 # Default if resolution not found
+                    sort_key_func = get_pixels_from_cache
                 elif sort_by == 'Aspect Ratio': sort_key_func = self.get_image_aspect_ratio
                 # Add safety checks for file existence within lambda if needed
             except Exception as e: print(f"Error defining sort key for {sort_by}: {e}")
