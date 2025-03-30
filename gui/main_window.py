@@ -15,8 +15,8 @@ from collections import defaultdict
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QFileDialog, QVBoxLayout, QWidget,
     QLabel, QScrollArea, QHBoxLayout, QFrame, QDialog, QComboBox, # Removed QStyle
-    QSlider, QSpinBox, QSplitter, QTextEdit, QLineEdit, QListWidget, # Add QListWidget
-    QSizePolicy, QAbstractItemView, QMessageBox, QMenu, # Removed QDoubleSpinBox
+    QSlider, QSpinBox, QDoubleSpinBox, QSplitter, QTextEdit, QLineEdit, QListWidget, # Add QDoubleSpinBox
+    QSizePolicy, QAbstractItemView, QMessageBox, QMenu,
     QCheckBox, QListWidgetItem # Add QListWidgetItem
 )
 from PyQt6.QtGui import (
@@ -105,10 +105,20 @@ class ImageGallery(QMainWindow):
         self.current_page: int = 1
         self.total_pages: int = 1
         self.page_size: int = 50
+        self.target_height: int = 250 # Default row height
         self.thumbnail_loaders: Dict[int, Tuple[ImageLabel, str]] = {}
         self._temp_pred_callback: Optional[Callable] = None # For drag-drop predictions
         self._suggestions_map: Dict[str, str] = {}
         self._ignore_cursor_change_on_focus = False
+
+        # --- Slideshow State ---
+        self.is_slideshow_active: bool = False
+        self.slideshow_images: List[str] = []
+        self.slideshow_current_index: int = -1
+        self.slideshow_timer: QTimer = QTimer(self)
+        self.slideshow_timer.setSingleShot(True)
+        self.slideshow_button: Optional[QPushButton] = None
+        self.slideshow_delay_spinbox: Optional[QDoubleSpinBox] = None # Changed type hint
 
         # --- Initialization ---
         self.threadpool = QThreadPool()
@@ -204,13 +214,13 @@ class ImageGallery(QMainWindow):
         slider_frame = QFrame()
         slider_layout = QHBoxLayout(slider_frame)
         slider_layout.setContentsMargins(0,0,0,0)
-        self.slider_label = QLabel("Row Height:")
+        # self.target_height = 250 # Now initialized in __init__
+        self.slider_label = QLabel(f"Row Height: {self.target_height}px") # Initialize with value
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.min_row_height = 50
-        self.max_row_height = 400
-        self.target_height = 150
+        self.max_row_height = 400 # Keep max reasonable, user can adjust
         self.slider.setRange(self.min_row_height, self.max_row_height)
-        self.slider.setValue(self.target_height)
+        self.slider.setValue(self.target_height) # Set initial slider position
         slider_layout.addWidget(self.slider_label)
         slider_layout.addWidget(self.slider)
         top_controls_layout.addWidget(slider_frame)
@@ -256,6 +266,8 @@ class ImageGallery(QMainWindow):
 
         self.total_images_label = QLabel("Total Images: 0")
         top_controls_layout.addWidget(self.total_images_label)
+
+        # Slideshow controls are now added *after* the scroll area
         self.right_panel_layout.addLayout(top_controls_layout)
 
         self.scroll_area = QScrollArea()
@@ -268,6 +280,24 @@ class ImageGallery(QMainWindow):
         self.scroll_area.setWidget(self.scroll_content)
         self.right_panel_layout.addWidget(self.scroll_area)
 
+        # --- Slideshow Controls (Moved Here) ---
+        self.slideshow_frame = QFrame() # Store as instance variable if needed elsewhere
+        slideshow_layout = QHBoxLayout(self.slideshow_frame)
+        slideshow_layout.setContentsMargins(5, 5, 5, 0) # Reduce bottom margin to 0
+        self.slideshow_button = QPushButton("▶ Start Slideshow")
+        self.slideshow_delay_label = QLabel("Delay (s):")
+        self.slideshow_delay_spinbox = QDoubleSpinBox() # Changed to QDoubleSpinBox
+        self.slideshow_delay_spinbox.setDecimals(1)     # Allow one decimal place
+        self.slideshow_delay_spinbox.setRange(0.1, 120.0) # Range from 0.1s to 120s
+        self.slideshow_delay_spinbox.setSingleStep(0.5) # Step by 0.5s
+        self.slideshow_delay_spinbox.setValue(5.0)      # Default 5.0 seconds
+        self.slideshow_delay_spinbox.setFixedWidth(75) # Slightly wider for decimals
+        slideshow_layout.addStretch(1) # Push controls to the right
+        slideshow_layout.addWidget(self.slideshow_button)
+        slideshow_layout.addWidget(self.slideshow_delay_label)
+        slideshow_layout.addWidget(self.slideshow_delay_spinbox)
+        self.right_panel_layout.addWidget(self.slideshow_frame) # Add below scroll area
+        # --- End Slideshow Controls ---
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
         self.splitter.addWidget(self.left_panel_container)
         self.splitter.addWidget(self.right_panel)
@@ -298,6 +328,7 @@ class ImageGallery(QMainWindow):
     def setup_signals(self):
         """Connect signals to slots."""
         self.slider.valueChanged.connect(self.on_slider_moved)
+        self.slider.valueChanged.connect(self.update_slider_label) # Connect to new slot
         self.page_number_edit.valueChanged.connect(self.on_page_changed)
         self.page_size_edit.valueChanged.connect(self.on_page_size_changed)
         self.prev_button.clicked.connect(self.go_to_previous_page)
@@ -347,6 +378,19 @@ class ImageGallery(QMainWindow):
         self.updateInfoTextSignal.connect(self.update_info_text)
         self.requestImageAnalysis.connect(self.analyze_image_worker) # Connect to worker trigger
         self.thumbnailLoaded.connect(self.set_thumbnail)
+
+        # --- Slideshow Signals ---
+        if self.slideshow_button: # Check if UI elements were created
+            self.slideshow_button.clicked.connect(self.toggle_slideshow)
+        self.slideshow_timer.timeout.connect(self.advance_slideshow)
+
+        # Stop slideshow if underlying data changes significantly
+        self.advanced_search_panel.searchRequested.connect(self.stop_slideshow)
+        self.sorting_combo.currentIndexChanged.connect(self.stop_slideshow)
+        self.sort_order_combo.currentIndexChanged.connect(self.stop_slideshow)
+        # Connect the dialog signal that indicates active directories changed
+        # We need to find where ManageDirectoriesDialog is instantiated and connect its signal
+        # We will connect it when the dialog is opened in `open_manage_directories_dialog`
     
     # --- Helper Method for Context Menu Actions ---
     def search_similar_images(self, image_path: str):
@@ -386,6 +430,7 @@ class ImageGallery(QMainWindow):
         from .dialogs.manage_directories import ManageDirectoriesDialog
         dialog = ManageDirectoriesDialog(self, self.db, self.active_directories, self.threadpool)
         dialog.activeDirectoriesChanged.connect(self.update_active_directories_from_dialog)
+        dialog.activeDirectoriesChanged.connect(self.stop_slideshow) # Stop slideshow if dirs change
         dialog.processDirectoriesRequested.connect(self.process_directory)
         dialog.deleteDirectoriesRequested.connect(self.delete_images_from_directory_list)
         dialog.reprocessImagesRequested.connect(self.reprocess_images_action)
@@ -598,9 +643,15 @@ class ImageGallery(QMainWindow):
         self.total_images_label.setText(f"Total: {len(self.all_images)}")
 
     # --- UI Control Handlers ---
+    def update_slider_label(self, value):
+        """Updates the slider label with the current pixel value."""
+        self.slider_label.setText(f"Row Height: {value}px")
+
     def on_slider_moved(self, value):
+        """Handles slider movement for resizing, label update is handled by signal."""
         self.target_height = value
-        self.resize_timer.start(200)
+        # self.update_slider_label(value) # No longer needed here
+        self.resize_timer.start(200) # Debounce resize
 
     def on_page_changed(self):
         new_page = self.page_number_edit.value()
@@ -678,14 +729,27 @@ class ImageGallery(QMainWindow):
                 return None # Return None on error
 
         def handle_load_result(pixmap_result: Optional[QPixmap]):
+            load_successful = pixmap_result and not pixmap_result.isNull()
             if target_view: # Check if target_view is still valid
-                if pixmap_result and not pixmap_result.isNull():
+                if load_successful:
                     target_view.set_image(pixmap_result)
                 else:
                     print(f"ImageGallery: Could not load image: {img_path}")
                     target_view.set_image(None) # Show placeholder on failure
             else:
                  print("ImageGallery: Target view no longer valid after image load.")
+
+            # --- Slideshow Timer Logic ---
+            if self.is_slideshow_active:
+                if load_successful:
+                    delay_ms = (self.slideshow_delay_spinbox.value() * 1000) if self.slideshow_delay_spinbox else 5000
+                    print(f"  Slideshow: Image loaded, starting timer for {delay_ms}ms")
+                    self.slideshow_timer.start(delay_ms)
+                else:
+                    # Image failed to load, advance quickly
+                    print(f"  Slideshow: Image failed to load, advancing quickly.")
+                    QTimer.singleShot(100, self.advance_slideshow) # Advance after 100ms
+            # --- End Slideshow Timer Logic ---
 
         worker = Worker(load_and_display_task)
         # Connect the worker's finished signal to handle the result
@@ -1725,25 +1789,110 @@ class ImageGallery(QMainWindow):
     def unload_model_safely(self):
         print("Unloading model..."); self.model.unload_model(); print("Model unloaded.")
 
-    def set_ui_enabled(self, enabled: bool):
-        """Enables/disables UI elements during long operations."""
+    def set_ui_enabled(self, enabled: bool, during_slideshow: bool = False):
+        """
+        Enables/disables UI elements during long operations or slideshow.
+        If during_slideshow is True, 'enabled' typically means False for most controls.
+        """
+        # Controls always affected by long processing (like directory scan)
         self.advanced_search_panel.search_button.setEnabled(enabled)
-        self.advanced_search_panel.search_field.setEnabled(enabled)
         self.manage_directories_button.setEnabled(enabled)
-        # Add other elements like sliders, pagination if needed
-        self.slider.setEnabled(enabled)
-        self.page_number_edit.setEnabled(enabled)
-        self.page_size_edit.setEnabled(enabled)
-        self.prev_button.setEnabled(enabled)
-        self.next_button.setEnabled(enabled)
-        self.sorting_combo.setEnabled(enabled)
-        # Only enable sort order if not random
-        if self.sorting_combo.currentText() != "Random":
-             self.sort_order_combo.setEnabled(enabled)
 
+        # Controls affected by both processing AND slideshow state
+        slideshow_running = self.is_slideshow_active
+
+        # Search field: Disabled during processing OR slideshow
+        self.advanced_search_panel.search_field.setEnabled(enabled and not slideshow_running)
+
+        # Gallery controls: Disabled during processing OR slideshow
+        self.slider.setEnabled(enabled and not slideshow_running)
+        self.page_number_edit.setEnabled(enabled and not slideshow_running)
+        self.page_size_edit.setEnabled(enabled and not slideshow_running)
+        self.prev_button.setEnabled(enabled and not slideshow_running)
+        self.next_button.setEnabled(enabled and not slideshow_running)
+        self.sorting_combo.setEnabled(enabled and not slideshow_running)
+        # Only enable sort order if not random AND not slideshow
+        is_random_sort = self.sorting_combo.currentText() == "Random"
+        self.sort_order_combo.setEnabled(enabled and not is_random_sort and not slideshow_running)
+
+        # Slideshow controls: Enabled ONLY if not processing, state depends on slideshow itself
+        if self.slideshow_button:
+            self.slideshow_button.setEnabled(enabled) # Button itself is enabled unless processing
+        if self.slideshow_delay_spinbox:
+            self.slideshow_delay_spinbox.setEnabled(enabled and not slideshow_running) # Delay editable only when stopped & not processing
+
+    # --- Slideshow Methods ---
+    @pyqtSlot()
+    def toggle_slideshow(self):
+        """Starts or stops the image slideshow."""
+        if self.is_slideshow_active:
+            self.stop_slideshow()
+        else:
+            self.start_slideshow()
+
+    def start_slideshow(self):
+        """Initializes and starts the slideshow."""
+        if not self.all_images:
+            QMessageBox.information(self, "Slideshow", "No images found matching the current criteria.")
+            return
+
+        if self.is_slideshow_active:
+            return # Already running
+
+        print("Starting slideshow...")
+        self.is_slideshow_active = True
+        self.slideshow_images = list(self.all_images) # Take a copy
+        self.slideshow_current_index = -1 # Will be incremented before first display
+
+        if self.slideshow_button:
+            self.slideshow_button.setText("⏹ Stop Slideshow")
+
+        # Disable interfering UI elements
+        self.set_ui_enabled(True, during_slideshow=True) # Pass True to indicate slideshow context
+
+        # Start the cycle
+        self.advance_slideshow()
+
+    @pyqtSlot() # Allow connection from signals like search/sort changes
+    def stop_slideshow(self):
+        """Stops the currently running slideshow."""
+        if not self.is_slideshow_active:
+            return
+
+        print("Stopping slideshow...")
+        self.is_slideshow_active = False
+        self.slideshow_timer.stop()
+        self.slideshow_images = []
+        self.slideshow_current_index = -1
+
+        if self.slideshow_button:
+            self.slideshow_button.setText("▶ Start Slideshow")
+
+        # Re-enable UI elements
+        self.set_ui_enabled(True, during_slideshow=False) # Pass False to indicate slideshow stopped
+
+    @pyqtSlot() # Connected to timer timeout
+    def advance_slideshow(self):
+        """Advances to the next image in the slideshow."""
+        if not self.is_slideshow_active or not self.slideshow_images:
+            self.stop_slideshow() # Stop if state is inconsistent
+            return
+
+        self.slideshow_current_index += 1
+        if self.slideshow_current_index >= len(self.slideshow_images):
+            self.slideshow_current_index = 0 # Loop back
+
+        next_image_path = self.slideshow_images[self.slideshow_current_index]
+        print(f"Slideshow advancing to index {self.slideshow_current_index}: {next_image_path}")
+
+        # Display image - the timer restart logic is now in handle_load_result
+        self.display_image_in_preview(next_image_path)
+
+    # --- End Slideshow Methods ---
 
     # --- Cleanup ---
     def closeEvent(self, event):
+        self.stop_slideshow() # Ensure slideshow stops cleanly
         self.unload_model_safely()
         # Wait for threadpool to finish?
         # self.threadpool.waitForDone()

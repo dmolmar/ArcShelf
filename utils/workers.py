@@ -4,7 +4,8 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from PyQt6.QtCore import QObject, QRunnable, Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QImage, QPixmap
-# from PIL import Image, UnidentifiedImageError # Removed unused PIL imports
+from PIL import UnidentifiedImageError
+# from PIL import Image # Removed unused PIL import
 
 # Use TYPE_CHECKING to avoid circular import for ThumbnailCache type hint
 if TYPE_CHECKING:
