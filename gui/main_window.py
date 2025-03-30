@@ -40,9 +40,12 @@ from utils.workers import Worker, ThumbnailLoader # Assuming ThumbnailLoaderSign
 from gui.widgets.image_label import ImageLabel
 from gui.widgets.drag_drop_area import DragDropArea
 from gui.widgets.advanced_search import AdvancedSearchPanel # Import the actual panel
+# Import the check function we need
+from .dialogs.requirements_dialog import check_critical_requirements
 # Dialogs will be imported within methods where needed
 # from .dialogs.manage_directories import ManageDirectoriesDialog
 # from .dialogs.export_jpg import ExportAsJPGDialog
+# from .dialogs.requirements_dialog import RequirementsDialog # Already imported where needed
 
 # --- Utility Function (Consider moving to utils module later) ---
 def human_readable_size(size_bytes: Optional[int]) -> str:
@@ -110,6 +113,7 @@ class ImageGallery(QMainWindow):
         self._temp_pred_callback: Optional[Callable] = None # For drag-drop predictions
         self._suggestions_map: Dict[str, str] = {}
         self._ignore_cursor_change_on_focus = False
+        # Removed self.requirements_met flag
 
         # --- Slideshow State ---
         self.is_slideshow_active: bool = False
@@ -150,6 +154,7 @@ class ImageGallery(QMainWindow):
         # Maximize the window on startup
         self.showMaximized()
 
+        # Removed call to _check_requirements_on_startup
     def _load_initial_active_directories(self):
         """Loads all unique directories from DB as initially active."""
         print("Loading initial active directories...")
@@ -205,6 +210,8 @@ class ImageGallery(QMainWindow):
         self.left_panel_layout.addWidget(self.advanced_search_panel)
         self.manage_directories_button = QPushButton("Manage Directories & Duplicates...")
         self.left_panel_layout.addWidget(self.manage_directories_button)
+        self.requirements_button = QPushButton("Check Requirements") # New button
+        self.left_panel_layout.addWidget(self.requirements_button) # Add new button to layout
 
         # --- Right Panel ---
         self.right_panel = QWidget()
@@ -337,6 +344,7 @@ class ImageGallery(QMainWindow):
         self.sort_order_combo.currentIndexChanged.connect(self.on_sort_order_changed)
         self.splitter.splitterMoved.connect(self.on_splitter_moved)
         self.manage_directories_button.clicked.connect(self.open_manage_directories_dialog)
+        self.requirements_button.clicked.connect(self.open_requirements_dialog) # Connect new button
 
         self.advanced_search_panel.searchRequested.connect(self.perform_search)
         self.advanced_search_panel.inputChanged.connect(self.on_text_or_cursor_changed)
@@ -436,6 +444,20 @@ class ImageGallery(QMainWindow):
         dialog.reprocessImagesRequested.connect(self.reprocess_images_action)
         dialog.updateStatusText.connect(self.updateInfoTextSignal.emit)
         dialog.exec()
+
+    def open_requirements_dialog(self):
+        """Opens the dialog for checking and managing requirements."""
+        # Import locally as per existing pattern
+        from .dialogs.requirements_dialog import RequirementsDialog
+        dialog = RequirementsDialog(self)
+        # The main window no longer needs to track the status directly, so the connection below is removed.
+        # dialog.requirementsMetStatus.connect(self._update_requirements_status)
+        dialog.exec()
+
+    # Removed _update_requirements_status slot
+    # Removed _check_requirements_on_startup method
+
+    # --- Gallery Display Logic ---
 
     @pyqtSlot(set)
     def update_active_directories_from_dialog(self, new_active_set: Set[str]):
@@ -744,7 +766,7 @@ class ImageGallery(QMainWindow):
                 if load_successful:
                     delay_ms = (self.slideshow_delay_spinbox.value() * 1000) if self.slideshow_delay_spinbox else 5000
                     print(f"  Slideshow: Image loaded, starting timer for {delay_ms}ms")
-                    self.slideshow_timer.start(delay_ms)
+                    self.slideshow_timer.start(int(delay_ms))
                 else:
                     # Image failed to load, advance quickly
                     print(f"  Slideshow: Image failed to load, advancing quickly.")
@@ -784,6 +806,12 @@ class ImageGallery(QMainWindow):
     @pyqtSlot(str) # Accept image path (str)
     def analyze_image_worker(self, image_path: str):
         """Slot connected to requestImageAnalysis signal, runs analysis in worker."""
+        # Use the direct check function
+        if not check_critical_requirements():
+            print("analyze_image_worker: Requirements check failed.") # Debug log
+            self.open_requirements_dialog() # Show the dialog
+            self.updateInfoTextSignal.emit(f"Analysis skipped for {os.path.basename(image_path)}: Requirements not met.\n") # Update status
+            return # Stop the action
         worker = Worker(self._analyze_image_task, image_path=image_path)
         # --- CHANGE: Connect to the 'finished' signal instead of 'result' ---
         worker.signals.finished.connect(self._handle_analysis_result)
@@ -938,6 +966,11 @@ class ImageGallery(QMainWindow):
     # --- Directory Processing Slots ---
     @pyqtSlot(list)
     def process_directory(self, directories: List[str]):
+        # Check requirements before proceeding
+        if not check_critical_requirements():
+            print("process_directory: Requirements check failed.") # Debug log
+            self.open_requirements_dialog() # Show the dialog to the user
+            return # Stop processing
         print(f"Received request to process directories: {directories}")
         if self.is_processing:
             QMessageBox.information(self, "Processing Busy", "Already processing directories. Please wait.")
@@ -1169,6 +1202,11 @@ class ImageGallery(QMainWindow):
     @pyqtSlot(list, dict)
     def reprocess_images_action(self, image_ids: List[str], properties: Dict[str, bool]):
         print(f"Received request to reprocess {len(image_ids)} images. Properties: {properties}")
+        # Check requirements before proceeding, especially if tags are involved
+        if properties.get("tags", False) and not check_critical_requirements():
+             print("reprocess_images_action: Requirements check failed (tags requested).") # Debug log
+             self.open_requirements_dialog() # Show the dialog to the user
+             return # Stop reprocessing
         if not image_ids or not any(properties.values()): return
         self.set_ui_enabled(False)
         self.updateInfoTextSignal.emit(f"Starting reprocessing for {len(image_ids)} images...\n")
@@ -1616,6 +1654,11 @@ class ImageGallery(QMainWindow):
         return image_paths
 
     def _perform_similarity_search(self, search_query: str, similar_image_path: str, tags: Optional[List[TagPrediction]]) -> List[str]:
+        # Check requirements before similarity search (which uses the model)
+        if not check_critical_requirements():
+            print("_perform_similarity_search: Requirements check failed.") # Debug log
+            self.open_requirements_dialog() # Show the dialog
+            return [] # Stop the action
         print(f"ImageGallery: _perform_similarity_search for: '{similar_image_path}'")
         base_image_paths: List[str] = self._perform_normal_search(search_query) if search_query else self._get_all_images_from_active_directories()
         print(f"  Base set for similarity: {len(base_image_paths)} images.")

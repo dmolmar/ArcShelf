@@ -1,17 +1,17 @@
 import sys
 import ctypes
+import traceback
 from pathlib import Path
 
-# Ensure the 'arc_explorer' package directory is in the Python path
-# This might not be strictly necessary if running from the project root,
-# but it helps ensure imports work correctly.
-
-from PyQt6.QtWidgets import QApplication
+# Imports - Assuming run.bat has installed requirements, these should succeed.
+# If they fail here, it indicates a deeper issue (e.g., corrupted install).
+import traceback # Keep for general error handling
+from PyQt6.QtWidgets import QApplication, QMessageBox # Keep QMessageBox for error popups
 from PyQt6.QtGui import QIcon, QImageReader
-
-# Import the main application window class
 from gui.main_window import ImageGallery
+from gui.dialogs.requirements_dialog import RequirementsDialog # Keep dialog import
 import config
+# Removed check_critical_requirements import, no longer used at startup
 
 def main():
     """Main function to set up and run the application."""
@@ -35,11 +35,33 @@ def main():
     # Remove Qt's image allocation limit if dealing with many large images
     QImageReader.setAllocationLimit(0)
 
-    # Create and show the main window
-    gallery = ImageGallery()
-    gallery.show() # showMaximized() is called within ImageGallery.__init__
+    # --- Create and Show Main Window ---
+    # No pre-check here anymore. If ImageGallery import failed earlier,
+    # this might raise NameError, but PyQt6 check ensures QApplication runs.
+    # If ImageGallery *did* import but its *internal* imports fail (like onnx),
+    # the window should still appear, and checks inside will handle it.
+    try:
+        gallery = ImageGallery()
+        gallery.show() # showMaximized() is called within ImageGallery.__init__
+    except NameError:
+        # This happens if 'ImageGallery' failed to import earlier due to missing deps
+        QMessageBox.critical(None, "Initialization Error",
+                             "Failed to initialize the main window.\n"
+                             "This might be due to missing dependencies like 'onnxruntime' or 'pandas'.\n"
+                             "Please use the 'Check Requirements' button (if available) or run 'run.bat'.")
+        # Don't start event loop if main window failed
+        sys.exit(1)
+    except Exception as e:
+        # Catch other unexpected errors during gallery initialization
+        QMessageBox.critical(None, "Initialization Error",
+                             f"An unexpected error occurred during startup:\n{e}\n\n"
+                             "Please check the console output for details.")
+        print(f"Unexpected error during ImageGallery init: {e}")
+        traceback.print_exc()
+        sys.exit(1)
 
-    # Start the application event loop
+
+    # Start the application event loop (only if gallery was successfully shown)
     sys.exit(app.exec())
 
 if __name__ == "__main__":

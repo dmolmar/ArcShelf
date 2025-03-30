@@ -48,12 +48,9 @@ class Worker(QRunnable):
         super().__init__()
         self.fn = fn
         self.args = args
-        self.kwargs = kwargs
+        self.kwargs = kwargs # Callbacks must be passed in kwargs by the caller now
         self.signals = WorkerSignals()
-
-        # Optional: Add callback hook for progress reporting within fn
-        # self.kwargs['progress_callback'] = self.signals.progress.emit
-        # self.kwargs['status_callback'] = self.signals.update_info_text.emit
+        # No automatic callback injection here anymore.
 
     @pyqtSlot()
     def run(self):
@@ -62,13 +59,16 @@ class Worker(QRunnable):
             # Execute the function with stored arguments
             result = self.fn(*self.args, **self.kwargs)
             # Emit the final result via the finished signal
+            print(f"Worker: Function '{self.fn.__name__}' finished. Emitting 'finished' signal with result: {type(result)}") # DEBUG LOG
             self.signals.finished.emit(result)
         except Exception as e:
             print(f"Worker error in function '{self.fn.__name__}': {e}", file=sys.stderr)
             traceback_str = traceback.format_exc()
             print(traceback_str, file=sys.stderr)
             # Emit the error signal with exception and traceback
-            self.signals.error.emit((e, traceback_str))
+            # Emit exception type, value, and traceback string
+            exctype, value = sys.exc_info()[:2]
+            self.signals.error.emit((exctype, value, traceback_str))
 
 # --- Thumbnail Loader Worker ---
 
