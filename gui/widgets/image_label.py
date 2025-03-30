@@ -60,6 +60,8 @@ class ImageLabel(QLabel):
         open_in_viewer_action = menu.addAction("Open in default viewer")
         open_in_browser_action = menu.addAction("Show in file browser")
         copy_name_action = menu.addAction("Copy image filename")
+        copy_image_action = menu.addAction("Copy image") # ADDED
+        copy_tags_action = menu.addAction("Copy tags") # ADDED
         export_jpg_action = menu.addAction("Export as JPG...")
 
         menu.addSeparator()
@@ -79,6 +81,10 @@ class ImageLabel(QLabel):
             self.copy_image_name()
         elif action == export_jpg_action:
             self.export_as_jpg()
+        elif action == copy_image_action: # ADDED
+            self.gallery._copy_image_to_clipboard(self.image_path) # ADDED
+        elif action == copy_tags_action: # ADDED
+            self.gallery._copy_tags_to_clipboard(self.image_path) # ADDED
         elif action == search_similar_action:
             self.search_similar_images()
 

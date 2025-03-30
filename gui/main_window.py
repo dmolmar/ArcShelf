@@ -20,11 +20,11 @@ from PyQt6.QtWidgets import (
     QCheckBox, QListWidgetItem # Add QListWidgetItem
 )
 from PyQt6.QtGui import (
-    QPixmap, QDragEnterEvent, QDropEvent, QShortcut, # Removed QImageReader, QImage
+    QPixmap, QDragEnterEvent, QDropEvent, QShortcut, QImage, # Added QImage
     QIcon, QTextCursor, QAction, QKeyEvent
 )
 from PyQt6.QtCore import (
-    Qt, QTimer, pyqtSignal, QObject, pyqtSlot, QRunnable, QThreadPool, QSize
+    Qt, QTimer, pyqtSignal, QObject, pyqtSlot, QRunnable, QThreadPool, QSize, QMimeData # Added QMimeData
 )
 from PIL import Image, UnidentifiedImageError
 
@@ -838,7 +838,7 @@ class ImageGallery(QMainWindow):
             store_temp_predictions_callback: Optional callback to store predictions (used for drag-drop).
         """
         print(f"ImageGallery: Processing image info: {img_path}, analyze={analyze}")
-        self.info_text.clear()
+        # self.info_text.clear() # REMOVED: Clear moved to result handlers
         self._temp_pred_callback = store_temp_predictions_callback # Store callback
 
         if analyze:
@@ -895,10 +895,15 @@ class ImageGallery(QMainWindow):
     @pyqtSlot(object) # Receives result from worker signal (tuple)
     def _handle_analysis_result(self, result_data: Tuple[str, Optional[List[TagPrediction]], Optional[str]]):
         """Handles the result of image analysis from the worker."""
+        self.info_text.clear() # ADDED: Clear before showing final result
         info_text, predictions, img_path = result_data
 
-        # --- CHANGE: Ensure info text is updated even on error ---
-        self.updateInfoTextSignal.emit(info_text) # Update UI text (will show error if analysis failed)
+        # --- CHANGE: Emit imageInfoSignal to ensure scroll to top ---
+        # self.updateInfoTextSignal.emit(info_text) # OLD: Appends and scrolls down
+        if img_path: # Ensure we have a path to emit
+            self.imageInfoSignal.emit(info_text, img_path) # NEW: Sets text and scrolls up
+        else: # Fallback if path is somehow None (shouldn't happen on success)
+            self.updateInfoTextSignal.emit(info_text)
         # --- END CHANGE ---
 
         if predictions is None or img_path is None: # Indicates an error occurred during analysis
@@ -944,6 +949,7 @@ class ImageGallery(QMainWindow):
 
     def display_image_info_from_db(self, img_path: str):
         print(f"ImageGallery: Retrieving image info from database: {img_path}")
+        self.info_text.clear() # ADDED: Clear before showing final result
         try:
             rating, tags = self.db.get_image_info_by_path(img_path)
             if rating is not None and tags is not None:
@@ -1980,6 +1986,75 @@ class ImageGallery(QMainWindow):
         self.display_image_in_preview(next_image_path)
 
     # --- End Slideshow Methods ---
+
+    # --- Clipboard Helper Methods ---
+    def _copy_image_to_clipboard(self, image_path: str):
+        """Loads an image and copies it to the system clipboard."""
+        if not image_path or not Path(image_path).exists():
+            print(f"Error copying image: Invalid path {image_path}")
+            self.updateInfoTextSignal.emit("Error: Could not copy image (invalid path).\n")
+            return
+        try:
+            clipboard = QApplication.clipboard()
+            if not clipboard:
+                print("Error copying image: Could not access clipboard.")
+                self.updateInfoTextSignal.emit("Error: Could not access clipboard.\n")
+                return
+
+            # Load using QImage for clipboard compatibility
+            image = QImage(image_path)
+            if image.isNull():
+                print(f"Error copying image: Failed to load image {image_path} with QImage.")
+                self.updateInfoTextSignal.emit("Error: Failed to load image for copying.\n")
+                return
+
+            clipboard.setImage(image)
+            print(f"Copied image '{os.path.basename(image_path)}' to clipboard.")
+            self.updateInfoTextSignal.emit(f"Copied image '{os.path.basename(image_path)}' to clipboard.\n")
+
+        except Exception as e:
+            print(f"Error copying image '{image_path}' to clipboard: {e}")
+            self.updateInfoTextSignal.emit(f"Error copying image: {e}\n")
+            traceback.print_exc()
+
+    def _copy_tags_to_clipboard(self, image_path: str):
+        """Fetches tags for an image and copies them as comma-separated text."""
+        if not image_path:
+            print("Error copying tags: Invalid path.")
+            self.updateInfoTextSignal.emit("Error: Could not copy tags (invalid path).\n")
+            return
+        try:
+            clipboard = QApplication.clipboard()
+            if not clipboard:
+                print("Error copying tags: Could not access clipboard.")
+                self.updateInfoTextSignal.emit("Error: Could not access clipboard.\n")
+                return
+
+            # Fetch tags from DB
+            rating, tags = self.db.get_image_info_by_path(image_path)
+            if tags is None: # Check if tags list is None (error or not found)
+                print(f"Error copying tags: Could not retrieve tags for {image_path} from DB.")
+                self.updateInfoTextSignal.emit(f"Error: Could not retrieve tags for '{os.path.basename(image_path)}'.\n")
+                return
+            if not tags: # Check if tags list is empty
+                print(f"No tags found for {image_path} to copy.")
+                self.updateInfoTextSignal.emit(f"No tags found for '{os.path.basename(image_path)}' to copy.\n")
+                clipboard.setText("") # Clear clipboard or set empty string
+                return
+
+            # Format tags (excluding rating category for simplicity, or include if desired)
+            tag_names = sorted([t.tag for t in tags if t.category.lower() != 'rating'])
+            tags_string = ", ".join(tag_names)
+
+            clipboard.setText(tags_string)
+            print(f"Copied {len(tag_names)} tags for '{os.path.basename(image_path)}' to clipboard.")
+            self.updateInfoTextSignal.emit(f"Copied tags for '{os.path.basename(image_path)}' to clipboard.\n")
+
+        except Exception as e:
+            print(f"Error copying tags for '{image_path}' to clipboard: {e}")
+            self.updateInfoTextSignal.emit(f"Error copying tags: {e}\n")
+            traceback.print_exc()
+    # --- End Clipboard Helper Methods ---
 
     # --- Cleanup ---
     def closeEvent(self, event):

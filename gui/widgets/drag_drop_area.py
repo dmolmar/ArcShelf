@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QPointF, QRectF, QSize
 from PyQt6.QtGui import (
     QDragEnterEvent, QDropEvent, QAction, QPixmap, QResizeEvent, QWheelEvent,
-    QMouseEvent, QPainter, QColor # Removed QBrush, QPen
+    QMouseEvent, QPainter, QColor, QDragMoveEvent # Removed QBrush, QPen
 )
 
 # Use TYPE_CHECKING for type hints to avoid circular imports
@@ -485,20 +485,55 @@ class DragDropArea(QGraphicsView):
     # --- Drag and Drop (No changes needed here, uses set_image) ---
     def dragEnterEvent(self, event: QDragEnterEvent):
         mime_data = event.mimeData()
+        print(f"[DEBUG] DragEnter: Mime types: {mime_data.formats()}") # ADDED
+
         if mime_data.hasUrls():
+            print("[DEBUG] DragEnter: Mime data HAS URLs.") # ADDED
             urls = mime_data.urls()
-            # Check only the first URL for efficiency if needed, but allow multiple for visual cue
-            if any(url.isLocalFile() and url.toLocalFile().lower().endswith(SUPPORTED_IMAGE_EXTENSIONS) for url in urls):
+            print(f"[DEBUG] DragEnter: URLs found: {urls}") # ADDED
+            accepted = False # ADDED
+            for i, url in enumerate(urls):
+                print(f"[DEBUG] DragEnter: Checking URL {i}: {url.toString()}") # ADDED
+                is_local = url.isLocalFile()
+                print(f"[DEBUG] DragEnter:   Is local file? {is_local}") # ADDED
+                if is_local:
+                    local_path = url.toLocalFile()
+                    print(f"[DEBUG] DragEnter:   Local path: {local_path}") # ADDED
+                    is_supported = local_path.lower().endswith(SUPPORTED_IMAGE_EXTENSIONS)
+                    print(f"[DEBUG] DragEnter:   Supported extension? {is_supported}") # ADDED
+                    if is_supported:
+                        accepted = True # Mark as accepted if *any* URL is valid
+                        # No need to break, let it print info for all URLs
+            
+            if accepted:
+                print("[DEBUG] DragEnter: At least one URL is supported. Accepting proposed action.") # ADDED
                 event.acceptProposedAction()
-                # Simple visual feedback (can be customized with stylesheets)
-                self.setStyleSheet("QGraphicsView { border: 3px dashed #44aaff; }")
-                return
-        event.ignore()
+                # Change background color for visual feedback instead of border/outline
+                self.setStyleSheet("QGraphicsView { background-color: #e0f0ff; }") # MODIFIED
+                return # Exit after accepting
+            else: # ADDED
+                print("[DEBUG] DragEnter: NO supported image URL found. Ignoring event.") # ADDED
+
+        else: # ADDED
+            print("[DEBUG] DragEnter: Mime data does NOT have URLs. Ignoring event.") # ADDED
+
+        event.ignore() # Ignore if no URLs or no supported URLs found
 
 
     def dragLeaveEvent(self, event):
         self.setStyleSheet("") # Reset style
         super().dragLeaveEvent(event)
+
+    def dragMoveEvent(self, event: QDragMoveEvent):
+        """Handles drag move events to continuously accept valid image drags."""
+        mime_data = event.mimeData()
+        if mime_data.hasUrls():
+            urls = mime_data.urls()
+            if any(url.isLocalFile() and url.toLocalFile().lower().endswith(SUPPORTED_IMAGE_EXTENSIONS) for url in urls):
+                event.acceptProposedAction()
+                # No need to set stylesheet here, dragEnterEvent handles initial style
+                return # Exit after accepting
+        event.ignore() # Ignore otherwise
 
     def dropEvent(self, event: QDropEvent):
         self.setStyleSheet("") # Reset style
@@ -516,32 +551,51 @@ class DragDropArea(QGraphicsView):
                  print(f"DragDropArea: Dropped URL is not a local file: {url.toString()}")
 
         if path_to_process:
-            print(f"DragDropArea: Dropped image path: {path_to_process}")
+            print(f"[DEBUG] DragDropArea: Processing dropped path: {path_to_process}") # ADDED
             self.dropped_image_path = path_to_process
             self.temporary_predictions = None # Clear old predictions
 
             # Load the image using QPixmap
+            print(f"[DEBUG] DragDropArea: Attempting QPixmap load...") # ADDED
             pixmap = QPixmap(path_to_process)
             if pixmap.isNull():
-                 print(f"DragDropArea: Failed to load dropped image with QPixmap: {path_to_process}")
+                 print(f"[ERROR] DragDropArea: QPixmap load FAILED for: {path_to_process}") # MODIFIED
+                 print(f"[DEBUG] DragDropArea: Calling set_image(None) due to load failure.") # ADDED
                  self.set_image(None) # Show placeholder on load failure
                  event.ignore()
                  return
+            else: # ADDED BLOCK
+                 print(f"[DEBUG] DragDropArea: QPixmap load SUCCEEDED. Size: {pixmap.width()}x{pixmap.height()}") # ADDED
 
             # This triggers LOD generation and fitting
+            print(f"[DEBUG] DragDropArea: Calling set_image(pixmap)...") # ADDED
             self.set_image(pixmap)
+            print(f"[DEBUG] DragDropArea: Returned from set_image(pixmap).") # ADDED
+
+            # --- ADDED: Show processing message immediately ---
+            if hasattr(self.image_gallery, 'updateInfoTextSignal'):
+                print(f"[DEBUG] DragDropArea: Emitting 'Processing...' status.")
+                # Use the signal that sets text and scrolls to top for consistency
+                self.image_gallery.imageInfoSignal.emit(f"Processing {os.path.basename(path_to_process)}...", path_to_process)
+            # --- END ADDED ---
 
             # Notify the main gallery to process metadata/tags etc.
             if hasattr(self.image_gallery, 'process_image_info'):
+                print(f"[DEBUG] DragDropArea: Calling image_gallery.process_image_info...") # ADDED
                 # Use the callback to receive temporary predictions asynchronously if needed
                 self.image_gallery.process_image_info(
                     path_to_process,
                     analyze=True, # Assume analysis is wanted on drop
                     store_temp_predictions_callback=self.set_temporary_predictions
                 )
+                print(f"[DEBUG] DragDropArea: Returned from image_gallery.process_image_info.") # ADDED
+            else: # ADDED
+                print(f"[WARN] DragDropArea: image_gallery missing 'process_image_info' method.") # ADDED
             event.acceptProposedAction()
+            print(f"[DEBUG] DragDropArea: Drop event accepted.") # ADDED
         else:
             # No valid image path found
+            print(f"[DEBUG] DragDropArea: No valid image path found in drop event. Ignored.") # ADDED
             event.ignore()
 
 
@@ -617,11 +671,15 @@ class DragDropArea(QGraphicsView):
                  open_in_viewer_action = context_menu.addAction("Open in default viewer")
                  open_in_browser_action = context_menu.addAction("Show in file browser")
                  copy_name_action = context_menu.addAction("Copy image filename")
+                 copy_image_action = context_menu.addAction("Copy image") # ADDED
+                 copy_tags_action = context_menu.addAction("Copy tags") # ADDED
                  export_jpg_action = context_menu.addAction("Export as JPG...")
-
+ 
                  open_in_viewer_action.triggered.connect(lambda: self._open_in_viewer(current_image_path))
                  open_in_browser_action.triggered.connect(lambda: self._open_in_file_browser(current_image_path))
                  copy_name_action.triggered.connect(lambda: self._copy_image_name(current_image_path))
+                 copy_image_action.triggered.connect(lambda p=current_image_path: self.image_gallery._copy_image_to_clipboard(p)) # ADDED
+                 copy_tags_action.triggered.connect(lambda p=current_image_path: self.image_gallery._copy_tags_to_clipboard(p)) # ADDED
                  export_jpg_action.triggered.connect(lambda: self._export_as_jpg(current_image_path))
 
             # Execute the menu at the global cursor position
