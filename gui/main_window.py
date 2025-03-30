@@ -41,7 +41,7 @@ from gui.widgets.image_label import ImageLabel
 from gui.widgets.drag_drop_area import DragDropArea
 from gui.widgets.advanced_search import AdvancedSearchPanel # Import the actual panel
 # Import the check function we need
-from .dialogs.requirements_dialog import check_critical_requirements
+# from .dialogs.requirements_dialog import check_critical_requirements # No longer used directly here
 # Dialogs will be imported within methods where needed
 # from .dialogs.manage_directories import ManageDirectoriesDialog
 # from .dialogs.export_jpg import ExportAsJPGDialog
@@ -65,6 +65,54 @@ def human_readable_size(size_bytes: Optional[int]) -> str:
     except (ValueError, OverflowError):
         # Handle potential math errors for very large numbers
         return f"{size_bytes} B"
+
+# --- Tagging Requirements Check ---
+def are_tagging_requirements_met() -> bool:
+    """
+    Checks if critical requirements for image tagging are met:
+    1. onnxruntime package can be imported.
+    2. Model file (model.onnx) exists.
+    3. Tags file (selected_tags.csv) exists.
+    """
+    try:
+        # 1. Check onnxruntime import
+        import onnxruntime
+        print("DEBUG: are_tagging_requirements_met - onnxruntime import OK.")
+    except ImportError as e:
+        print(f"DEBUG: are_tagging_requirements_met - Failed to import onnxruntime: {e}")
+        return False
+    except Exception as e: # Catch other potential import errors
+        print(f"DEBUG: are_tagging_requirements_met - Unexpected error importing onnxruntime: {e}")
+        return False
+
+    # 2. Check model file existence (using config)
+    try:
+        import config # Ensure config is accessible
+        if not config.MODEL_PATH.is_file():
+            print(f"DEBUG: are_tagging_requirements_met - Model file missing: {config.MODEL_PATH}")
+            return False
+        print(f"DEBUG: are_tagging_requirements_met - Model file found: {config.MODEL_PATH}")
+    except ImportError:
+         print("DEBUG: are_tagging_requirements_met - Could not import config to check model path.")
+         return False # Cannot check if config isn't available
+    except Exception as e:
+         print(f"DEBUG: are_tagging_requirements_met - Error checking model file path: {e}")
+         return False
+
+    # 3. Check tags file existence (using config)
+    try:
+        # config should already be imported from check above
+        if not config.TAGS_CSV_PATH.is_file():
+            print(f"DEBUG: are_tagging_requirements_met - Tags file missing: {config.TAGS_CSV_PATH}")
+            return False
+        print(f"DEBUG: are_tagging_requirements_met - Tags file found: {config.TAGS_CSV_PATH}")
+    except Exception as e: # Catch potential errors if config wasn't imported properly before
+         print(f"DEBUG: are_tagging_requirements_met - Error checking tags file path: {e}")
+         return False
+
+    # All checks passed
+    print("DEBUG: are_tagging_requirements_met - All tagging requirements met.")
+    return True
 
 
 # --- Main Application Window ---
@@ -807,7 +855,7 @@ class ImageGallery(QMainWindow):
     def analyze_image_worker(self, image_path: str):
         """Slot connected to requestImageAnalysis signal, runs analysis in worker."""
         # Use the direct check function
-        if not check_critical_requirements():
+        if not are_tagging_requirements_met(): # Use the new comprehensive check
             print("analyze_image_worker: Requirements check failed.") # Debug log
             self.open_requirements_dialog() # Show the dialog
             self.updateInfoTextSignal.emit(f"Analysis skipped for {os.path.basename(image_path)}: Requirements not met.\n") # Update status
@@ -967,7 +1015,7 @@ class ImageGallery(QMainWindow):
     @pyqtSlot(list)
     def process_directory(self, directories: List[str]):
         # Check requirements before proceeding
-        if not check_critical_requirements():
+        if not are_tagging_requirements_met(): # Use the new comprehensive check
             print("process_directory: Requirements check failed.") # Debug log
             self.open_requirements_dialog() # Show the dialog to the user
             return # Stop processing
@@ -1203,7 +1251,7 @@ class ImageGallery(QMainWindow):
     def reprocess_images_action(self, image_ids: List[str], properties: Dict[str, bool]):
         print(f"Received request to reprocess {len(image_ids)} images. Properties: {properties}")
         # Check requirements before proceeding, especially if tags are involved
-        if properties.get("tags", False) and not check_critical_requirements():
+        if properties.get("tags", False) and not are_tagging_requirements_met(): # Use the new comprehensive check
              print("reprocess_images_action: Requirements check failed (tags requested).") # Debug log
              self.open_requirements_dialog() # Show the dialog to the user
              return # Stop reprocessing
@@ -1655,7 +1703,7 @@ class ImageGallery(QMainWindow):
 
     def _perform_similarity_search(self, search_query: str, similar_image_path: str, tags: Optional[List[TagPrediction]]) -> List[str]:
         # Check requirements before similarity search (which uses the model)
-        if not check_critical_requirements():
+        if not are_tagging_requirements_met(): # Use the new comprehensive check
             print("_perform_similarity_search: Requirements check failed.") # Debug log
             self.open_requirements_dialog() # Show the dialog
             return [] # Stop the action

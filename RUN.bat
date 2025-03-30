@@ -48,7 +48,7 @@ echo Virtual environment activated.
 
 echo Checking/updating requirements (forcing reinstall)...
 REM Added --force-reinstall to ensure all packages are present and correct
-"%VENV_DIR%\Scripts\python.exe" -m pip install -r "%REQ_FILE%" --force-reinstall --no-cache-dir --disable-pip-version-check || (
+"%VENV_DIR%\Scripts\python.exe" -m pip install -r "%REQ_FILE%" --no-cache-dir --disable-pip-version-check || (
     echo ERROR: Failed to update/reinstall requirements in existing venv. Check console output.
     echo Possible issues: network connection, file permissions, incompatible packages.
     echo For GPU features, ensure compatible drivers and potentially the Visual C++ Redistributable are installed.

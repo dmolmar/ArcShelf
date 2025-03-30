@@ -5,6 +5,9 @@ import json
 import platform
 import re # Import re for parsing requirements
 from pathlib import Path
+import requests # For downloading model files
+import shutil   # For saving downloaded files safely
+import os       # Needed for os.remove in _download_file cleanup
 from typing import Dict, List, Optional, Tuple
 
 from PyQt6.QtWidgets import (
@@ -60,6 +63,14 @@ except ImportError:
 # Define VENV path relative to project root
 VENV_PATH = Path(config.BASE_DIR) / ".venv"
 REQ_FILE = Path(config.BASE_DIR) / "requirements.txt"
+
+# --- Model Download URLs ---
+MODEL_URL = "https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3/resolve/main/model.onnx"
+TAGS_URL = "https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3/raw/main/selected_tags.csv"
+
+# --- Model Download URLs ---
+MODEL_URL = "https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3/resolve/main/model.onnx"
+TAGS_URL = "https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3/raw/main/selected_tags.csv"
 
 # --- Static Check Function ---
 def check_critical_requirements() -> bool:
@@ -128,6 +139,8 @@ class RequirementsDialog(QDialog):
         self.pip_status_label = QLabel("Pip: ?")
         self.packages_status_label = QLabel("Packages: ?")
         self.onnx_status_label = QLabel("ONNX Runtime: ?")
+        self.model_file_status_label = QLabel("Model File: ?") # New label for ONNX model file
+        self.tags_file_status_label = QLabel("Tags File: ?")   # New label for CSV tags file
 
         # Add labels with some spacing/stretch
         status_indicators_layout.addWidget(self.python_status_label)
@@ -139,6 +152,10 @@ class RequirementsDialog(QDialog):
         status_indicators_layout.addWidget(self.packages_status_label)
         status_indicators_layout.addStretch()
         status_indicators_layout.addWidget(self.onnx_status_label)
+        status_indicators_layout.addStretch()
+        status_indicators_layout.addWidget(self.model_file_status_label) # Add new label
+        status_indicators_layout.addStretch()
+        status_indicators_layout.addWidget(self.tags_file_status_label)  # Add new label
 
         layout.addWidget(status_indicators_widget)
         # --- End Status Indicators ---
@@ -236,6 +253,19 @@ class RequirementsDialog(QDialog):
 
         self.onnx_status_label.setText(onnx_status_text)
         self.onnx_status_label.setStyleSheet(onnx_style)
+
+        # Update Model File Status Label
+        model_file_ok = results.get('model_file_ok')
+        self.model_file_status_label.setText(f"Model File: {'OK' if model_file_ok else 'FAIL' if model_file_ok is False else '?'}")
+        self.model_file_status_label.setStyleSheet(ok_style if model_file_ok else fail_style if model_file_ok is False else na_style)
+
+        # Update Tags File Status Label
+        tags_file_ok = results.get('tags_file_ok')
+        self.tags_file_status_label.setText(f"Tags File: {'OK' if tags_file_ok else 'FAIL' if tags_file_ok is False else '?'}")
+        self.tags_file_status_label.setStyleSheet(ok_style if tags_file_ok else fail_style if tags_file_ok is False else na_style)
+
+        self.onnx_status_label.setText(onnx_status_text)
+        self.onnx_status_label.setStyleSheet(onnx_style)
         # --- End Status Labels ---
 
         overall_status_ok = results.get('overall_ok', False)
@@ -304,6 +334,10 @@ class RequirementsDialog(QDialog):
         self.packages_status_label.setStyleSheet(default_style)
         self.onnx_status_label.setText("ONNX Runtime: ?")
         self.onnx_status_label.setStyleSheet(default_style)
+        self.model_file_status_label.setText("Model File: ?") # Reset new label
+        self.model_file_status_label.setStyleSheet(default_style)
+        self.tags_file_status_label.setText("Tags File: ?")   # Reset new label
+        self.tags_file_status_label.setStyleSheet(default_style)
         self.status_label.setText("Running checks...")
 
     # --- Button Click Handlers ---
@@ -367,10 +401,12 @@ class RequirementsDialog(QDialog):
             "gpu_detected": None,
             "onnx_package_needed": None,
             "packages_ok": None,
-            "onnx_ok": None,
+            "onnx_ok": None, # Status of the onnxruntime *package*
+            "model_file_ok": None, # Status of the model.onnx file
+            "tags_file_ok": None,  # Status of the selected_tags.csv file
             "missing_packages": [],
             "needs_install": False,
-            "overall_ok": False, # Added overall status flag
+            "overall_ok": False,
         }
         # progress_callback is used directly below
 
@@ -538,6 +574,42 @@ class RequirementsDialog(QDialog):
              results["needs_install"] = True
              import traceback
              progress_callback(traceback.format_exc()) # Show traceback for package check errors
+        print("DEBUG: run_checks_worker - Package check finished.") # DEBUG LOG
+
+        # --- 6. Check Model Files ---
+        progress_callback("--- Checking Model Files ---")
+        print("DEBUG: run_checks_worker - Checking model files...") # DEBUG LOG
+        try:
+            # Use the config imported at the module level.
+            # Add a check to ensure it's actually loaded, though it should be.
+            if 'config' not in sys.modules or not hasattr(config, 'MODEL_PATH'):
+                 progress_callback("ERROR: Config module not properly loaded in worker. Cannot check model files.")
+                 print("ERROR: Config module not properly loaded in worker.")
+                 results["model_file_ok"] = False
+                 results["tags_file_ok"] = False
+                 results["needs_install"] = True
+            else:
+                 # Proceed with checks using the module-level config
+                 print(f"DEBUG: Checking model path: {config.MODEL_PATH}")
+                 results["model_file_ok"] = config.MODEL_PATH.is_file()
+            status_model = 'OK' if results["model_file_ok"] else 'FAIL (Missing)'
+            progress_callback(f"Model File ({config.MODEL_PATH.name}): {status_model}")
+
+            results["tags_file_ok"] = config.TAGS_CSV_PATH.is_file()
+            status_tags = 'OK' if results["tags_file_ok"] else 'FAIL (Missing)'
+            progress_callback(f"Tags File ({config.TAGS_CSV_PATH.name}): {status_tags}")
+
+            if not results["model_file_ok"] or not results["tags_file_ok"]:
+                results["needs_install"] = True # Mark for install if either file is missing
+
+        except Exception as e:
+             progress_callback(f"Model File Check Error: {e}")
+             results["model_file_ok"] = False
+             results["tags_file_ok"] = False
+             results["needs_install"] = True
+             import traceback
+             progress_callback(traceback.format_exc())
+        print("DEBUG: run_checks_worker - Model files check finished.") # DEBUG LOG
 
         # --- Final Summary ---
         progress_callback("--- Check Summary ---")
@@ -547,8 +619,14 @@ class RequirementsDialog(QDialog):
         progress_callback(f"GPU Detected: {results['gpu_detected']}")
         progress_callback(f"Packages OK: {results['packages_ok']}")
         progress_callback(f"ONNX Runtime OK: {results['onnx_ok']}")
+        progress_callback(f"Model File OK: {results['model_file_ok']}") # Add model file status
+        progress_callback(f"Tags File OK: {results['tags_file_ok']}")   # Add tags file status
         if results["missing_packages"]:
-            progress_callback(f"Missing/Incorrect: {', '.join(results['missing_packages'])}")
+            progress_callback(f"Missing/Incorrect Packages: {', '.join(results['missing_packages'])}")
+        if not results.get("model_file_ok", False): # Use .get for safety
+             progress_callback(f"Missing File: {config.MODEL_PATH.name}")
+        if not results.get("tags_file_ok", False): # Use .get for safety
+             progress_callback(f"Missing File: {config.TAGS_CSV_PATH.name}")
         progress_callback(f"Requires Install/Fix: {results['needs_install']}")
         progress_callback("---------------------")
 
@@ -557,7 +635,9 @@ class RequirementsDialog(QDialog):
             results["python_ok"] and
             results["venv_ok"] and
             results["pip_ok"] and
-            results["packages_ok"] # This now includes the correct ONNX check
+            results["packages_ok"] and # This now includes the correct ONNX check
+            results.get("model_file_ok", False) and # Add model file check to overall status
+            results.get("tags_file_ok", False)      # Add tags file check to overall status
         )
         progress_callback(f"Overall Requirements Met: {results['overall_ok']}")
 
@@ -570,7 +650,11 @@ class RequirementsDialog(QDialog):
         # progress_callback is used directly below
         print("DEBUG: run_install_worker started.") # DEBUG LOG
         progress_callback("--- Starting Installation ---")
+        pip_install_ok = False # Flag to track pip install success
+        model_files_ok = True # Assume OK unless download fails
         try:
+            # --- 1. Pip Installation ---
+            progress_callback("--- Installing/Updating Pip Packages ---")
             print("DEBUG: run_install_worker - Getting pip path...") # DEBUG LOG
             venv_pip = self._get_venv_pip_path()
             if not venv_pip or not venv_pip.is_file():
@@ -590,7 +674,9 @@ class RequirementsDialog(QDialog):
                 with open(REQ_FILE, 'r') as f:
                     for line in f:
                         line = line.strip()
-                        if line and not line.startswith('#'):
+                        # Strip inline comments before further processing
+                        line = line.split('#', 1)[0].strip()
+                        if line: # Check if line is not empty after stripping comment
                             # Exclude onnxruntime placeholder if present
                             match = re.match(r"^\s*([a-zA-Z0-9_\-]+)", line)
                             if match and "onnxruntime" not in match.group(1).lower():
@@ -605,9 +691,9 @@ class RequirementsDialog(QDialog):
             progress_callback(f"Attempting to install/update: {', '.join(packages_to_install)}")
 
             # Construct pip install command
-            # Using --upgrade ensures packages are updated to versions compatible with specifiers
             # Using --no-cache-dir might help avoid issues with corrupted caches
-            cmd = [str(venv_pip), "install", "--upgrade", "--no-cache-dir"] + packages_to_install
+            # Removed --upgrade to strictly adhere to requirements.txt versions
+            cmd = [str(venv_pip), "install", "--no-cache-dir"] + packages_to_install
 
             progress_callback(f"Running: {' '.join(cmd)}") # Correctly indented
             print("DEBUG: run_install_worker - Starting pip install subprocess...") # DEBUG LOG
@@ -632,23 +718,176 @@ class RequirementsDialog(QDialog):
             process.wait() # Wait for the process to complete # Correctly indented
             print(f"DEBUG: run_install_worker - pip install subprocess finished with code: {process.returncode}") # DEBUG LOG
 
-            if process.returncode == 0: # Correctly indented
-                progress_callback("--- Installation Completed Successfully ---")
-                print("DEBUG: run_install_worker finished successfully.") # DEBUG LOG inside try
-                return True
-            else: # Correctly indented
-                progress_callback(f"--- Installation Failed (Exit Code: {process.returncode}) ---")
-                # progress_callback(f"Stderr: {stderr_output}") # Already emitted line by line
-                print("DEBUG: run_install_worker finished with failure (pip error).") # DEBUG LOG inside try
-                return False
+            if process.returncode == 0:
+                 progress_callback("--- Pip Installation Completed Successfully ---")
+                 print("DEBUG: run_install_worker - Pip install successful.") # DEBUG LOG
+                 pip_install_ok = True
+            else:
+                progress_callback(f"--- Pip Installation Failed (Exit Code: {process.returncode}) ---")
+                print("DEBUG: run_install_worker - Pip install failed.") # DEBUG LOG
+                pip_install_ok = False
+
+            # --- 2. Model File Download (if pip install was OK) ---
+            # Note: We check file existence *after* pip install, as pip might have installed
+            # a version that requires different model files (unlikely, but possible).
+            # The check worker's results are not directly used here for file status.
+            if pip_install_ok:
+                progress_callback("--- Checking/Downloading Model Files ---")
+                # Use the module-level config, but check if it's loaded.
+                if 'config' not in sys.modules or not hasattr(config, 'MODELS_DIR'):
+                     progress_callback("ERROR: Config module not properly loaded in worker. Cannot download model files.")
+                     print("ERROR: Config module not properly loaded in install worker.")
+                     model_files_ok = False # Cannot proceed without proper config
+                else:
+                    # Proceed using the module-level config
+                    # Ensure models directory exists using the local_config
+                    # Ensure models directory exists using the module-level config
+                    try:
+                        config.MODELS_DIR.mkdir(parents=True, exist_ok=True)
+                        print(f"DEBUG: Ensured models directory exists: {config.MODELS_DIR}")
+                    except OSError as e:
+                         progress_callback(f"ERROR: Could not create models directory {config.MODELS_DIR}: {e}")
+                         print(f"ERROR: Could not create models directory {config.MODELS_DIR}: {e}")
+                         model_files_ok = False # Cannot download if dir creation fails
+
+                    # Download Model if missing
+                    # Download Model if missing
+                    if model_files_ok and not config.MODEL_PATH.is_file():
+                        progress_callback(f"Model file '{config.MODEL_PATH.name}' missing. Attempting download...")
+                        print(f"DEBUG: Attempting download for {config.MODEL_PATH.name}")
+                        model_download_success = self._download_file(
+                            MODEL_URL, config.MODEL_PATH, "Model", progress_callback
+                        )
+                        if not model_download_success:
+                            progress_callback(f"ERROR: Failed to download model file.")
+                            print(f"ERROR: Failed to download model file {MODEL_URL}")
+                            model_files_ok = False # Mark failure
+                        else:
+                             progress_callback(f"Model file download complete.")
+                             print(f"DEBUG: Model file download complete for {config.MODEL_PATH.name}")
+
+                    # Download Tags if missing
+                    # Download Tags if missing
+                    if model_files_ok and not config.TAGS_CSV_PATH.is_file():
+                        progress_callback(f"Tags file '{config.TAGS_CSV_PATH.name}' missing. Attempting download...")
+                        print(f"DEBUG: Attempting download for {config.TAGS_CSV_PATH.name}")
+                        tags_download_success = self._download_file(
+                            TAGS_URL, config.TAGS_CSV_PATH, "Tags", progress_callback
+                        )
+                        if not tags_download_success:
+                            progress_callback(f"ERROR: Failed to download tags file.")
+                            print(f"ERROR: Failed to download tags file {TAGS_URL}")
+                            model_files_ok = False # Mark failure (overall model files status)
+                        else:
+                             progress_callback(f"Tags file download complete.")
+                             print(f"DEBUG: Tags file download complete for {config.TAGS_CSV_PATH.name}")
+
+
+            # --- 3. Final Result ---
+            overall_success = pip_install_ok and model_files_ok
+            if overall_success:
+                progress_callback("--- Installation/Download Completed Successfully ---")
+                print("DEBUG: run_install_worker finished successfully.")
+            else:
+                 progress_callback("--- Installation/Download Finished with Errors ---")
+                 print("DEBUG: run_install_worker finished with failure (pip or download error).")
+            return overall_success
 
         except Exception as e: # Correctly indented
             progress_callback(f"--- Installation Error: {e} ---")
             import traceback
             progress_callback(traceback.format_exc())
             print("DEBUG: run_install_worker finished with error (exception).") # DEBUG LOG inside except
-            return False
+            return False # Return False on any exception during the process
         # Removed final print statement as return happens within try/except
+
+    def _download_file(self, url: str, target_path: Path, file_description: str, progress_callback: pyqtSignal) -> bool:
+        """Downloads a file with progress reporting."""
+        # Ensure target directory exists before attempting download
+        try:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            progress_callback(f"ERROR: Could not create directory {target_path.parent} for {file_description}: {e}")
+            print(f"ERROR: Could not create directory {target_path.parent} for {file_description}: {e}")
+            return False
+
+        temp_target_path = target_path.with_suffix(target_path.suffix + '.part')
+        print(f"DEBUG: Downloading {file_description} to temporary file: {temp_target_path}")
+        try:
+            progress_callback(f"Starting download for {file_description} from {url}...")
+            # Use a session for potential connection reuse and headers if needed
+            with requests.Session() as session:
+                # Add a User-Agent header, some servers might block default requests UA
+                headers = {'User-Agent': 'ArcExplorer-RequirementsDialog/1.0'}
+                response = session.get(url, stream=True, timeout=120, headers=headers) # Increased timeout further, added headers
+                response.raise_for_status()  # Raise HTTPError for bad responses (4xx or 5xx)
+
+                total_size_in_bytes = int(response.headers.get('content-length', 0))
+                total_size_mb = total_size_in_bytes / (1024 * 1024) if total_size_in_bytes > 0 else 0
+                block_size = 1024 * 1024 # 1MB chunk size for potentially faster downloads?
+                downloaded_size = 0
+                last_reported_percent = -1
+                report_interval_mb = 10 # Report every 10 MB
+                next_report_mb = report_interval_mb
+
+                progress_callback(f"Downloading {file_description} ({total_size_mb:.1f} MB)...")
+
+                with open(temp_target_path, 'wb') as file:
+                    for chunk in response.iter_content(chunk_size=block_size):
+                        if chunk:  # Filter out keep-alive new chunks
+                            file.write(chunk)
+                            downloaded_size += len(chunk)
+                            downloaded_mb = downloaded_size / (1024 * 1024)
+
+                            if total_size_in_bytes > 0:
+                                percent = int(100 * downloaded_size / total_size_in_bytes)
+                                # Report progress roughly every 5% or every report_interval_mb, whichever comes first
+                                # Ensure we report at least once near the end
+                                if percent == 100 or percent >= last_reported_percent + 5 or downloaded_mb >= next_report_mb:
+                                    progress_callback(
+                                        f"Downloading {file_description}: {downloaded_mb:.1f}/{total_size_mb:.1f} MB ({percent}%)"
+                                    )
+                                    last_reported_percent = percent
+                                    while downloaded_mb >= next_report_mb: # Update next report threshold
+                                         next_report_mb += report_interval_mb
+                            else:
+                                # Report progress in MB if total size is unknown
+                                if downloaded_mb >= next_report_mb:
+                                     progress_callback(f"Downloading {file_description}: {downloaded_mb:.1f} MB...")
+                                     while downloaded_mb >= next_report_mb: # Update next report threshold
+                                          next_report_mb += report_interval_mb
+
+                # Rename temporary file to final target path upon successful download
+                print(f"DEBUG: Moving temporary file {temp_target_path} to {target_path}")
+                shutil.move(str(temp_target_path), str(target_path))
+                progress_callback(f"{file_description} download finished successfully.")
+                print(f"DEBUG: {file_description} download finished successfully.")
+                return True
+
+        except requests.exceptions.RequestException as e:
+            progress_callback(f"ERROR downloading {file_description}: Network error - {e}")
+            print(f"Network error downloading {url}: {e}")
+        except OSError as e:
+             progress_callback(f"ERROR saving/moving {file_description}: File system error - {e}")
+             print(f"File system error saving/moving {target_path}: {e}")
+        except Exception as e:
+            progress_callback(f"ERROR during {file_description} download: {e}")
+            print(f"Unexpected error downloading {url}: {e}")
+            import traceback
+            progress_callback(traceback.format_exc())
+            print(traceback.format_exc()) # Also print traceback to console for debugging
+
+        # Cleanup temporary file if it exists and an error occurred
+        if temp_target_path.exists():
+            try:
+                print(f"DEBUG: Removing temporary file {temp_target_path}")
+                os.remove(temp_target_path) # Use os.remove since temp_target_path is Path object
+                progress_callback(f"Cleaned up partial download file: {temp_target_path.name}")
+            except OSError as cleanup_e:
+                 progress_callback(f"Warning: Could not remove partial download file {temp_target_path.name}: {cleanup_e}")
+                 print(f"Warning: Could not remove partial download file {temp_target_path.name}: {cleanup_e}")
+
+        return False
 
 
     # --- Helper Methods ---
