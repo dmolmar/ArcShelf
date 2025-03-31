@@ -1,6 +1,9 @@
 import sqlite3
 from typing import Set, TYPE_CHECKING
 
+# Import utility function
+from utils.path_utils import normalize_path
+
 # Import AST node types from the parser module
 from .query_parser import ASTNode, TagNode, AndNode, OrNode, NotNode, BracketNode, AllImagesNode
 
@@ -24,7 +27,7 @@ class SearchQueryEvaluator:
         """
         self.db = db
         # Store normalized selected directories
-        self.selected_directories = {self.db.normalize_path(d) for d in selected_directories}
+        self.selected_directories = {normalize_path(d) for d in selected_directories}
 
     def evaluate(self, node: ASTNode) -> Set[str]:
         """

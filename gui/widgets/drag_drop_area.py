@@ -765,7 +765,8 @@ class DragDropArea(QGraphicsView):
     def remove_image(self):
         """Clears the displayed image, LODs, and associated data, showing the placeholder."""
         print("DragDropArea: Remove Image clicked")
-        self.set_image(None) # This handles clearing data and showing placeholder
+        self.set_image(None) # This clears internal image data
+        self._show_placeholder_text() # Explicitly show placeholder now
         self.dropped_image_path = None
         self.temporary_predictions = None
         print(f"DragDropArea: Preview cleared.")

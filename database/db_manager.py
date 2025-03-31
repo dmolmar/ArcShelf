@@ -556,7 +556,6 @@ class Database:
             # Populate the dictionary with normalized paths from the DB
             # Use COLLATE NOCASE logic here in Python for matching
             all_db_resolutions = {normalize_path(db_path): resolution for db_path, resolution in all_rows}
-            print(f"DEBUG: get_resolutions_for_paths - Fetched {len(all_db_resolutions)} total resolutions from DB.")
 
             # Now, lookup the requested paths in the fetched dictionary
             results = {}
@@ -580,7 +579,7 @@ class Database:
             results = {path: None for path in paths}
         
         # Log a sample of the final returned dictionary
-        print(f"DEBUG: get_resolutions_for_paths - Returning results dict. Example: {list(results.items())[:5]}")
+        # print(f"DEBUG: get_resolutions_for_paths - Returning results dict. Example: {list(results.items())[:5]}") # Removed verbose debug log
         return results
 
 

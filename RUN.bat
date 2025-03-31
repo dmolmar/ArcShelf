@@ -107,5 +107,5 @@ IF EXIST "%VENV_DIR%\Scripts\deactivate.bat" (
 
 :EndScript
 echo.
-pause
+REM pause
 endlocal

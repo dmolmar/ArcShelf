@@ -69,55 +69,6 @@ def human_readable_size(size_bytes: Optional[int]) -> str:
         # Handle potential math errors for very large numbers
         return f"{size_bytes} B"
 
-# --- Tagging Requirements Check ---
-def are_tagging_requirements_met() -> bool:
-    """
-    Checks if critical requirements for image tagging are met:
-    1. onnxruntime package can be imported.
-    2. Model file (model.onnx) exists.
-    3. Tags file (selected_tags.csv) exists.
-    """
-    try:
-        # 1. Check onnxruntime import
-        import onnxruntime
-        print("DEBUG: are_tagging_requirements_met - onnxruntime import OK.")
-    except ImportError as e:
-        print(f"DEBUG: are_tagging_requirements_met - Failed to import onnxruntime: {e}")
-        return False
-    except Exception as e: # Catch other potential import errors
-        print(f"DEBUG: are_tagging_requirements_met - Unexpected error importing onnxruntime: {e}")
-        return False
-
-    # 2. Check model file existence (using config)
-    try:
-        import config # Ensure config is accessible
-        if not config.MODEL_PATH.is_file():
-            print(f"DEBUG: are_tagging_requirements_met - Model file missing: {config.MODEL_PATH}")
-            return False
-        print(f"DEBUG: are_tagging_requirements_met - Model file found: {config.MODEL_PATH}")
-    except ImportError:
-         print("DEBUG: are_tagging_requirements_met - Could not import config to check model path.")
-         return False # Cannot check if config isn't available
-    except Exception as e:
-         print(f"DEBUG: are_tagging_requirements_met - Error checking model file path: {e}")
-         return False
-
-    # 3. Check tags file existence (using config)
-    try:
-        # config should already be imported from check above
-        if not config.TAGS_CSV_PATH.is_file():
-            print(f"DEBUG: are_tagging_requirements_met - Tags file missing: {config.TAGS_CSV_PATH}")
-            return False
-        print(f"DEBUG: are_tagging_requirements_met - Tags file found: {config.TAGS_CSV_PATH}")
-    except Exception as e: # Catch potential errors if config wasn't imported properly before
-         print(f"DEBUG: are_tagging_requirements_met - Error checking tags file path: {e}")
-         return False
-
-    # All checks passed
-    print("DEBUG: are_tagging_requirements_met - All tagging requirements met.")
-    return True
-
-
 # --- Main Application Window ---
 class ImageGallery(QMainWindow):
     # Define signals used for cross-thread communication or decoupling
@@ -146,6 +97,7 @@ class ImageGallery(QMainWindow):
         self.main_layout = QHBoxLayout(self.central_widget)
 
         # --- Application State ---
+        self.tagging_features_enabled = True
         self.similarity_mode: bool = False
         self.last_selected_image_path: Optional[str] = None
         self.suppress_search_on_dropdown_update: bool = False
@@ -191,6 +143,7 @@ class ImageGallery(QMainWindow):
 
         # Model Initialization
         self.model = ImageTaggerModel(config.MODEL_PATH, config.TAGS_CSV_PATH)
+        self.model.model_load_error_signal.connect(self._handle_model_load_error)
 
         # --- UI Setup ---
         self.setup_ui()
@@ -204,6 +157,28 @@ class ImageGallery(QMainWindow):
 
         # Maximize the window on startup
         self.showMaximized()
+
+    @pyqtSlot(str)
+    def _handle_model_load_error(self, error_message: str):
+        """Handles the signal emitted when the ImageTaggerModel fails to load."""
+        if not self.tagging_features_enabled:
+            return # Only show the message/disable features once
+
+        self.tagging_features_enabled = False
+        print(f"Received model load error: {error_message}")
+
+        # Inform User
+        QMessageBox.warning(self, "Tagging Unavailable",
+                            f"Image tagging and analysis features are unavailable due to an error:\n\n"
+                            f"{error_message}\n\n"
+                            "Please check the 'Check Requirements' dialog for details and potential fixes.")
+
+        # Disable Tagging-Related UI (Example - adjust as needed)
+        # You might need to disable specific context menu actions,
+        # buttons in Manage Directories, etc.
+
+        # Update status bar (if you have one)
+        self.updateInfoTextSignal.emit("Tagging features disabled. Check requirements.\n")
 
         # Removed call to _check_requirements_on_startup
     def _load_initial_active_directories(self):
@@ -860,12 +835,6 @@ class ImageGallery(QMainWindow):
     @pyqtSlot(str) # Accept image path (str)
     def analyze_image_worker(self, image_path: str):
         """Slot connected to requestImageAnalysis signal, runs analysis in worker."""
-        # Use the direct check function
-        if not are_tagging_requirements_met(): # Use the new comprehensive check
-            print("analyze_image_worker: Requirements check failed.") # Debug log
-            self.open_requirements_dialog() # Show the dialog
-            self.updateInfoTextSignal.emit(f"Analysis skipped for {os.path.basename(image_path)}: Requirements not met.\n") # Update status
-            return # Stop the action
         worker = Worker(self._analyze_image_task, image_path=image_path)
         # --- CHANGE: Connect to the 'finished' signal instead of 'result' ---
         worker.signals.finished.connect(self._handle_analysis_result)
@@ -918,9 +887,9 @@ class ImageGallery(QMainWindow):
              return # Don't proceed with DB add or callback execution
 
         # Handle DB update or temporary storage
-        normalized_path = self.db.normalize_path(img_path)
+        normalized_path = normalize_path(img_path) # Use imported function
         is_dropped_image = (self.drag_drop_area.dropped_image_path and
-                            self.db.normalize_path(self.drag_drop_area.dropped_image_path) == normalized_path)
+                            normalize_path(self.drag_drop_area.dropped_image_path) == normalized_path) # Use imported function
 
         if is_dropped_image and self._temp_pred_callback:
             print(f"Storing temporary predictions for dropped image: {img_path}")
@@ -1026,11 +995,6 @@ class ImageGallery(QMainWindow):
     # --- Directory Processing Slots ---
     @pyqtSlot(list)
     def process_directory(self, directories: List[str]):
-        # Check requirements before proceeding
-        if not are_tagging_requirements_met(): # Use the new comprehensive check
-            print("process_directory: Requirements check failed.") # Debug log
-            self.open_requirements_dialog() # Show the dialog to the user
-            return # Stop processing
         print(f"Received request to process directories: {directories}")
         if self.is_processing:
             QMessageBox.information(self, "Processing Busy", "Already processing directories. Please wait.")
@@ -1263,11 +1227,6 @@ class ImageGallery(QMainWindow):
     @pyqtSlot(list, dict)
     def reprocess_images_action(self, image_ids: List[str], properties: Dict[str, bool]):
         print(f"Received request to reprocess {len(image_ids)} images. Properties: {properties}")
-        # Check requirements before proceeding, especially if tags are involved
-        if properties.get("tags", False) and not are_tagging_requirements_met(): # Use the new comprehensive check
-             print("reprocess_images_action: Requirements check failed (tags requested).") # Debug log
-             self.open_requirements_dialog() # Show the dialog to the user
-             return # Stop reprocessing
         if not image_ids or not any(properties.values()): return
         self.set_ui_enabled(False)
         self.updateInfoTextSignal.emit(f"Starting reprocessing for {len(image_ids)} images...\n")
@@ -1715,11 +1674,7 @@ class ImageGallery(QMainWindow):
         return image_paths
 
     def _perform_similarity_search(self, search_query: str, similar_image_path: str, tags: Optional[List[TagPrediction]]) -> List[str]:
-        # Check requirements before similarity search (which uses the model)
-        if not are_tagging_requirements_met(): # Use the new comprehensive check
-            print("_perform_similarity_search: Requirements check failed.") # Debug log
-            self.open_requirements_dialog() # Show the dialog
-            return [] # Stop the action
+        # Requirements are assumed to be met if we reached here after initial analysis
         print(f"ImageGallery: _perform_similarity_search for: '{similar_image_path}'")
         base_image_paths: List[str] = self._perform_normal_search(search_query) if search_query else self._get_all_images_from_active_directories()
         print(f"  Base set for similarity: {len(base_image_paths)} images.")
