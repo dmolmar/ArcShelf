@@ -7,7 +7,7 @@ from PyQt6.QtGui import QImage
 # Define a fixed height for thumbnails or make it configurable
 THUMBNAIL_HEIGHT = 400
 # Define cache settings
-MEMORY_CACHE_MAXSIZE = 100 # Increased memory cache size
+MEMORY_CACHE_MAXSIZE = 500 # Increased memory cache size
 WEBP_QUALITY = 85 # Quality for saved WEBP thumbnails
 
 class ThumbnailCache:

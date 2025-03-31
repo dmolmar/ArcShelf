@@ -27,6 +27,9 @@ from utils.workers import Worker
 # Assuming config might be needed for paths, etc.
 import config
 
+# Import the new normalization function
+from utils.path_utils import normalize_path
+
 # Use TYPE_CHECKING for type hints to avoid circular imports
 if TYPE_CHECKING:
     from gui.main_window import ImageGallery # The main application window
@@ -275,7 +278,10 @@ class ManageDirectoriesDialog(QDialog):
         for path_str in paths:
             try:
                 parent_dir = os.path.dirname(path_str)
-                if parent_dir: directories.add(parent_dir)
+                if parent_dir:
+                    normalized_dir = normalize_path(parent_dir)
+                    if normalized_dir: # Ensure not empty after normalization
+                        directories.add(normalized_dir)
             except Exception as e: print(f"Error parsing directory from path '{path_str}': {e}")
 
         self.directory_list.clear()
@@ -389,7 +395,8 @@ class ManageDirectoriesDialog(QDialog):
         directory = QFileDialog.getExistingDirectory(self, "Select Directory", start_dir) # Simplified title
         if directory:
             print(f"Directory selected to add: {directory}")
-            self.directory_text.setText(self.db.normalize_path(directory))
+            # Normalize the path from the dialog before displaying
+            self.directory_text.setText(normalize_path(directory))
 
     # Renamed from add_and_process_directory
     def add_directory_action(self):
@@ -403,7 +410,7 @@ class ManageDirectoriesDialog(QDialog):
             QMessageBox.warning(self, "Invalid Directory", f"The selected path is not a valid directory:\n{directory}")
             return
 
-        normalized_directory = self.db.normalize_path(directory)
+        normalized_directory = normalize_path(directory) # Use imported function
         # Check if already in the list
         for i in range(self.directory_list.count()):
             widget = self.directory_list.itemWidget(self.directory_list.item(i))

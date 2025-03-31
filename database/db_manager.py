@@ -6,6 +6,9 @@ from pathlib import Path
 from typing import List, Tuple, Optional, TYPE_CHECKING
 from PIL import Image
 
+# Import the new normalization function
+from utils.path_utils import normalize_path
+
 # Use TYPE_CHECKING to avoid circular imports for type hints
 if TYPE_CHECKING:
     from image_processing.thumbnail import ThumbnailCache
@@ -76,7 +79,7 @@ class Database:
 
     def image_exists(self, path: str) -> bool:
         """Checks if an image with the given path exists in the database."""
-        normalized_path = self.normalize_path(path)
+        normalized_path = normalize_path(path)
         try:
             with self.lock:
                 with sqlite3.connect(self.db_path) as conn:
@@ -89,7 +92,7 @@ class Database:
 
     def add_image(self, path: str, predictions: List[TagPrediction], model: 'ImageTaggerModel'):
         """Adds or updates an image and its tags in the database."""
-        normalized_path = self.normalize_path(path)
+        normalized_path = normalize_path(path)
         try:
             # Get file metadata safely
             if not os.path.exists(path):
@@ -220,7 +223,7 @@ class Database:
 
     def delete_images_in_directory(self, directory: str):
         """Deletes all images from the database that reside within a given directory."""
-        directory_path = self.normalize_path(directory)
+        directory_path = normalize_path(directory)
         # Ensure directory path ends with '/' for accurate LIKE matching
         if not directory_path.endswith('/'):
             directory_path += '/'
@@ -274,9 +277,16 @@ class Database:
                     for image_id, db_path in rows:
                         # Use BASE_DIR from config if paths are relative, otherwise assume absolute
                         # Assuming paths stored are absolute or resolvable from CWD
-                        full_path = Path(db_path) # Re-evaluate if paths are stored relative to BASE_DIR
-                        if not full_path.is_file():
-                            print(f"Image file not found, marking for deletion: {db_path} (ID: {image_id})")
+                        # Normalize the path read from DB before checking existence
+                        normalized_db_path = normalize_path(db_path)
+                        # Check existence using the original path string for Path object creation,
+                        # as normalize_path might return an empty string for invalid inputs.
+                        # The core check remains if the file pointed to by the DB entry exists.
+                        if not db_path or not Path(db_path).is_file():
+                            # Log the original path from DB and the normalized version if different for debugging
+                            log_path = db_path if db_path else "<NULL>"
+                            log_normalized = normalized_db_path if normalized_db_path != log_path else ""
+                            print(f"Image file not found, marking for deletion: {log_path} {f'(Normalized: {log_normalized})' if log_normalized else ''} (ID: {image_id})")
                             image_ids_to_delete.append(image_id)
 
                     if not image_ids_to_delete:
@@ -350,14 +360,15 @@ class Database:
 
     def get_image_info_by_path(self, path: str) -> Tuple[Optional[str], List[TagPrediction]]:
         """Retrieves the rating and tags for a given image path."""
-        normalized_path = self.normalize_path(path)
+        normalized_path = normalize_path(path)
         try:
             with self.lock:
                 with sqlite3.connect(self.db_path) as conn:
                     # Read-only access, potentially faster
                     conn.execute("PRAGMA query_only = ON")
                     cursor = conn.cursor()
-                    cursor.execute("SELECT id, rating FROM images WHERE path = ?", (normalized_path,))
+                    # Use COLLATE NOCASE for case-insensitive path matching
+                    cursor.execute("SELECT id, rating FROM images WHERE path = ? COLLATE NOCASE", (normalized_path,))
                     row = cursor.fetchone()
                     if row:
                         image_id, rating = row
@@ -415,7 +426,7 @@ class Database:
                     # 1. Desired Directories (OR logic between directories)
                     dir_conditions = []
                     for d_dir in desired_dirs:
-                        norm_dir = self.normalize_path(d_dir)
+                        norm_dir = normalize_path(d_dir)
                         if not norm_dir.endswith('/'): norm_dir += '/'
                         dir_conditions.append("i.path LIKE ?")
                         image_params.append(f"{norm_dir}%")
@@ -424,7 +435,7 @@ class Database:
 
                     # 2. Undesired Directories (AND NOT logic)
                     for u_dir in undesired_dirs:
-                        norm_dir = self.normalize_path(u_dir)
+                        norm_dir = normalize_path(u_dir)
                         if not norm_dir.endswith('/'): norm_dir += '/'
                         image_conditions.append("i.path NOT LIKE ?")
                         image_params.append(f"{norm_dir}%")
@@ -503,13 +514,14 @@ class Database:
 
     def get_image_id_from_path(self, path: str) -> Optional[str]:
         """Retrieves the UUID for a given image path."""
-        normalized_path = self.normalize_path(path)
+        normalized_path = normalize_path(path)
         try:
             with self.lock:
                 with sqlite3.connect(self.db_path) as conn:
                     conn.execute("PRAGMA query_only = ON")
                     cursor = conn.cursor()
-                    cursor.execute("SELECT id FROM images WHERE path = ?", (normalized_path,))
+                    # Use COLLATE NOCASE for case-insensitive path matching
+                    cursor.execute("SELECT id FROM images WHERE path = ? COLLATE NOCASE", (normalized_path,))
                     row = cursor.fetchone()
                     return row[0] if row else None
         except sqlite3.Error as e:
@@ -519,42 +531,63 @@ class Database:
         """Retrieves the resolution string for a list of image paths."""
         if not paths:
             return {}
-        
+
         results = {}
         # Normalize paths before querying
-        normalized_paths_map = {self.normalize_path(p): p for p in paths}
-        normalized_paths_list = list(normalized_paths_map.keys())
-
-        query = f"""SELECT path, resolution 
-                   FROM images 
-                   WHERE path IN ({','.join('?'*len(normalized_paths_list))})"""
+        # Create a map from original path to normalized path
+        original_to_normalized_map = {p: normalize_path(p) for p in paths}
+        # Create a map from normalized path back to the *first* original path that normalized to it
+        # (Handles potential normalization collisions, though unlikely for full paths)
+        normalized_to_original_map = {norm_p: orig_p for orig_p, norm_p in original_to_normalized_map.items()}
         
+        print(f"DEBUG: get_resolutions_for_paths - Processing {len(paths)} requested paths.")
+        
+        all_db_resolutions = {} # Store all resolutions from DB {normalized_path: resolution}
         try:
             with self.lock:
                 conn = sqlite3.connect(self.db_path)
+                conn.text_factory = str # Ensure UTF-8 handling
                 cursor = conn.cursor()
-                cursor.execute(query, normalized_paths_list)
-                rows = cursor.fetchall()
+                # Fetch ALL paths and resolutions from the database
+                cursor.execute("SELECT path, resolution FROM images")
+                all_rows = cursor.fetchall()
                 conn.close()
             
-            # Map normalized paths back to original paths
-            normalized_results = {row[0]: row[1] for row in rows}
-            for norm_path, orig_path in normalized_paths_map.items():
-                results[orig_path] = normalized_results.get(norm_path)
-                
+            # Populate the dictionary with normalized paths from the DB
+            # Use COLLATE NOCASE logic here in Python for matching
+            all_db_resolutions = {normalize_path(db_path): resolution for db_path, resolution in all_rows}
+            print(f"DEBUG: get_resolutions_for_paths - Fetched {len(all_db_resolutions)} total resolutions from DB.")
+
+            # Now, lookup the requested paths in the fetched dictionary
+            results = {}
+            missing_count = 0
+            for original_path, normalized_path in original_to_normalized_map.items():
+                # Perform case-insensitive lookup equivalent in Python
+                resolution = all_db_resolutions.get(normalized_path)
+                results[original_path] = resolution
+                if resolution is None:
+                    # Log if a normalized path requested wasn't found in the full DB pull
+                    print(f"DEBUG: get_resolutions_for_paths - Normalized path '{normalized_path}' (from '{original_path}') not found in full DB results.")
+                    missing_count += 1
+            
+            if missing_count > 0:
+                 print(f"DEBUG: get_resolutions_for_paths - {missing_count} requested paths were not found in the full DB resolution data.")
+
         except sqlite3.Error as e:
+            print(f"DEBUG: get_resolutions_for_paths - DB Error fetching all resolutions: {e}")
             print(f"Database error in get_resolutions_for_paths: {e}")
-            # Return empty strings for all paths on error?
-            for path in paths:
-                results[path] = None
-                
+            # Return None for all paths on error
+            results = {path: None for path in paths}
+        
+        # Log a sample of the final returned dictionary
+        print(f"DEBUG: get_resolutions_for_paths - Returning results dict. Example: {list(results.items())[:5]}")
         return results
 
 
 
     def get_image_ids_in_directory(self, directory: str) -> List[str]:
         """Retrieves all image UUIDs within a given directory (recursive)."""
-        directory_path = self.normalize_path(directory)
+        directory_path = normalize_path(directory)
         if not directory_path.endswith('/'):
             directory_path += '/'
         try:
@@ -567,18 +600,3 @@ class Database:
         except sqlite3.Error as e:
             print(f"Database error getting image IDs in directory {directory_path}: {e}")
             return []
-
-
-    def normalize_path(self, path: str) -> str:
-        """Normalizes a path string to use forward slashes."""
-        try:
-            # Resolve to absolute path first to handle '..' etc. then normalize
-            # Be cautious if paths should remain relative - adjust as needed.
-            # If BASE_DIR is reliable, consider making paths relative to it.
-            # For now, assume absolute or resolvable paths are stored/passed.
-            normalized = os.path.normpath(os.path.abspath(path))
-            return normalized.replace(os.sep, '/')
-        except Exception as e:
-             print(f"Error normalizing path '{path}': {e}")
-             # Fallback to basic replacement if abspath fails
-             return path.replace(os.sep, '/')

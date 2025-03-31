@@ -28,6 +28,9 @@ from PyQt6.QtCore import (
 )
 from PIL import Image, UnidentifiedImageError
 
+# Import the new normalization function
+from utils.path_utils import normalize_path
+
 # --- Local Imports (within arc_explorer package) ---
 import config # For base directory, paths
 from database.db_manager import Database
@@ -215,7 +218,10 @@ class ImageGallery(QMainWindow):
                 try:
                     parent_dir = os.path.dirname(path_str)
                     if parent_dir:
-                        self.active_directories.add(parent_dir)
+                        # Normalize the directory path before adding
+                        normalized_dir = normalize_path(parent_dir)
+                        if normalized_dir: # Ensure it's not empty after normalization
+                            self.active_directories.add(normalized_dir)
                 except Exception as e:
                     print(f"Error parsing directory from path '{path_str}': {e}")
             print(f"Initial active directories: {self.active_directories}")
@@ -1044,7 +1050,8 @@ class ImageGallery(QMainWindow):
         for directory in directories:
             if os.path.isdir(directory):
                 try:
-                    paths_in_dir = [os.path.join(directory, f) for f in os.listdir(directory) if f.lower().endswith(config.SUPPORTED_FORMATS)]
+                    # Normalize paths as they are collected
+                    paths_in_dir = [normalize_path(os.path.join(directory, f)) for f in os.listdir(directory) if f.lower().endswith(config.SUPPORTED_FORMATS)]
                     all_image_paths.extend(paths_in_dir)
                 except OSError as e: print(f"Error listing directory {directory}: {e}")
             else: print(f"Directory not found or invalid: {directory}")
@@ -1086,7 +1093,7 @@ class ImageGallery(QMainWindow):
                             current_file_size = os.path.getsize(img_path)
 
                             # Check database
-                            normalized_path = self.db.normalize_path(img_path)
+                            normalized_path = normalize_path(img_path) # Use imported function
                             # --- MODIFICATION HERE: Select size, use COLLATE NOCASE ---
                             cursor.execute("SELECT modification_time, file_size FROM images WHERE path = ? COLLATE NOCASE", (normalized_path,))
                             result = cursor.fetchone()
@@ -1217,7 +1224,7 @@ class ImageGallery(QMainWindow):
         """Worker task for deleting directories."""
         total_deleted = 0
         for directory in directories:
-            normalized_directory = self.db.normalize_path(directory)
+            normalized_directory = normalize_path(directory) # Use imported function
             if not normalized_directory.endswith('/'): normalized_directory += '/'
             count = 'N/A'
             try:
@@ -1687,7 +1694,7 @@ class ImageGallery(QMainWindow):
             with self.db.lock, sqlite3.connect(self.db.db_path) as conn:
                 cursor = conn.cursor(); dir_conditions = []; params = []
                 for directory in self.active_directories:
-                    norm_dir = self.db.normalize_path(directory);
+                    norm_dir = normalize_path(directory); # Use imported function
                     if not norm_dir.endswith('/'): norm_dir += '/'
                     dir_conditions.append("path LIKE ?"); params.append(f"{norm_dir}%")
                 if not dir_conditions: return []
@@ -1730,7 +1737,8 @@ class ImageGallery(QMainWindow):
         try:
             with self.db.lock, sqlite3.connect(self.db.db_path) as conn:
                 cursor = conn.cursor()
-                paths_to_query = [p for p in base_image_paths if self.db.normalize_path(p) != self.db.normalize_path(similar_image_path)]
+                # Use imported normalize_path for comparison
+                paths_to_query = [p for p in base_image_paths if normalize_path(p) != normalize_path(similar_image_path)]
                 if not paths_to_query: return [] # Only the reference image matched base query
 
                 path_placeholders = ','.join('?' for _ in paths_to_query)
@@ -1859,6 +1867,11 @@ class ImageGallery(QMainWindow):
 
         # 2. Check pre-loaded resolution string cache
         resolution_str = self.image_resolutions.get(path)
+        if resolution_str is None:
+            # MOVED LOG: Only print lookup details if resolution is None
+            print(f"DEBUG: get_image_aspect_ratio - Lookup for path '{path}': Found resolution '{resolution_str}'")
+            print(f"DEBUG: get_image_aspect_ratio - Resolution string MISSING in cache for: {path}") # ADDED LOG
+        
         if resolution_str and 'x' in resolution_str:
             try:
                 width_str, height_str = resolution_str.split('x', 1)
@@ -1874,11 +1887,11 @@ class ImageGallery(QMainWindow):
                     return 1.0
             except (ValueError, TypeError) as e:
                 # Handle parsing errors (invalid format in DB?)
-                print(f"Warning: Could not parse resolution string '{resolution_str}' for {path}: {e}")
+                print(f"DEBUG: get_image_aspect_ratio - Could not PARSE resolution string '{resolution_str}' for {path}: {e}") # MODIFIED LOG
                 self.aspect_ratios[path] = 1.0 # Cache default
                 return 1.0 # Return default ratio on error
         
-        # 3. If resolution string not found or invalid, return None (or default 1.0?)
+        # 3. If resolution string not found or invalid (no 'x'), return None
         # Let's return None to indicate failure, the calling code handles default.
         # print(f"Warning: No valid resolution string found for {path} in self.image_resolutions.")
         return None
