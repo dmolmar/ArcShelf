@@ -82,7 +82,7 @@ class ImageGallery(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Arc-Explorer")
+        self.setWindowTitle("ArcShelf")
         self.setGeometry(100, 100, 1600, 900) # Adjusted default size
 
         # Set window icon using config

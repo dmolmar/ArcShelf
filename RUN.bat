@@ -46,7 +46,7 @@ call "%VENV_DIR%\Scripts\activate.bat" || (
 )
 echo Virtual environment activated.
 
-echo Checking/updating requirements (forcing reinstall)...
+echo Checking/updating requirements...
 REM Added --force-reinstall to ensure all packages are present and correct
 "%VENV_DIR%\Scripts\python.exe" -m pip install -r "%REQ_FILE%" --no-cache-dir --disable-pip-version-check || (
     echo ERROR: Failed to update/reinstall requirements in existing venv. Check console output.
@@ -93,10 +93,10 @@ goto LaunchApp
 REM --- Code continues here after venv is ready ---
 
 REM --- Launch Application ---
-echo Starting Arc-Explorer...
+echo Starting ArcShelf...
 REM Run the Python script using the venv's Python
-"%VENV_DIR%\Scripts\python.exe" Arc-Explorer.py
-echo Arc-Explorer finished.
+"%VENV_DIR%\Scripts\python.exe" main.py
+echo ArcShelf finished.
 
 REM --- Deactivate ---
 REM Attempt to deactivate (might fail if venv wasn't active, ignore error)

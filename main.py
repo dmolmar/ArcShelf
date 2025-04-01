@@ -17,7 +17,7 @@ def main():
     # Set AppUserModelID for Windows taskbar grouping and icon
     # See: https://docs.microsoft.com/en-us/windows/win32/shell/appids
     if sys.platform == "win32":
-        myappid = 'com.alexander.arcexplorer.1' # Unique ID for the app
+        myappid = 'com.dmolmar.arcshelf.1' # Unique ID for the app
         try:
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
         except AttributeError:

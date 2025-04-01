@@ -1,79 +1,70 @@
-# Arc-Explorer 🚀
+# ArcShelf 🚀
 
-Una aplicación de escritorio para gestionar, visualizar, buscar y etiquetar automáticamente colecciones de imágenes en Windows.
+A desktop application for managing, viewing, searching, and automatically tagging image collections on Windows.
 
-## Capturas de Pantalla
+[Versión en Español](README_es.md)
 
-<!-- Inserta aquí una captura de la vista principal de la galería -->
-*Vista principal de la galería.*
+![ArcShelf interface with example images](readme_preview.png "ArcShelf interface with example images")
 
-<!-- Inserta aquí una captura del panel de previsualización e información -->
-*Panel de previsualización e información detallada.*
+## Key Features ✨
 
-<!-- (Opcional) Inserta aquí una captura de la barra de búsqueda avanzada -->
-*Ejemplo de búsqueda avanzada.*
+*   **Intuitive Graphical Interface:** Developed with PyQt6 for a smooth user experience.
+*   **Customizable Image Gallery:** Adjust row height to tailor the display to your liking.
+*   **Advanced Preview:** View images with integrated zoom and panning.
+*   **AI-Powered Auto-Tagging:** Utilizes the powerful `wd-eva02-large-tagger-v3` model to automatically analyze and tag your images (ratings, characters, general tags).
+*   **Powerful Search:**
+    *   Search by tags using logical operators (`AND`, `OR`, `NOT`).
+    *   Tag suggestions as you type.
+    *   Similarity search to find visually similar images.
+*   **Directory Management:** Easily add or remove folders containing your image collections.
+*   **Duplicate Detection:** Tools to identify and manage duplicate images within added directories (accessible from "Manage Directories...").
+*   **Slideshow Mode:** View your images in full screen with automatic transitions.
+*   **Wide Format Support:** Compatible with `.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.gif`, `.tiff`, `.tif`.
 
-## Características Principales ✨
+## Requirements 📋
 
-*   **Interfaz Gráfica Intuitiva:** Desarrollada con PyQt6 para una experiencia de usuario fluida.
-*   **Galería de Imágenes Personalizable:** Ajusta la altura de las filas para adaptar la visualización a tu gusto.
-*   **Previsualización Avanzada:** Visualiza imágenes con zoom y desplazamiento (paneo) integrados.
-*   **Etiquetado Automático por IA:** Utiliza el potente modelo `wd-eva02-large-tagger-v3` para analizar y etiquetar tus imágenes automáticamente (ratings, personajes, etiquetas generales).
-*   **Búsqueda Potente:**
-    *   Busca por etiquetas usando operadores lógicos (`AND`, `OR`, `NOT`).
-    *   Sugerencias de etiquetas mientras escribes.
-    *   Búsqueda por similitud para encontrar imágenes visualmente parecidas.
-*   **Gestión de Directorios:** Añade o elimina fácilmente las carpetas que contienen tus colecciones de imágenes.
-*   **Detección de Duplicados:** Herramientas para identificar y gestionar imágenes duplicadas dentro de los directorios añadidos (accesible desde "Manage Directories...").
-*   **Modo Presentación (Slideshow):** Visualiza tus imágenes en pantalla completa con transiciones automáticas.
-*   **Amplio Soporte de Formatos:** Compatible con `.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.gif`, `.tiff`, `.tif`.
-*   **Base de Datos Eficiente:** Almacena metadatos (resolución, tamaño, fecha) y etiquetas en una base de datos SQLite para búsquedas rápidas.
-*   **Caché de Miniaturas:** Genera y guarda miniaturas para una carga y visualización más rápidas de la galería.
-
-## Requisitos 📋
-
-*   **Sistema Operativo:** Windows (Probado en Windows 11 Pro).
-*   **Python:** Versión 3.8 o superior. Se recomienda añadir Python al PATH del sistema.
+*   **Operating System:** Windows (Tested on Windows 11 Pro).
+*   **Python:** Version 3.8 or higher. Adding Python to the system PATH is recommended.
 *   **Hardware:**
-    *   Se recomienda encarecidamente una **GPU NVIDIA** compatible con CUDA para obtener el mejor rendimiento en el etiquetado automático de imágenes.
-    *   Si no se detecta una GPU compatible, la aplicación utilizará la **CPU** para el etiquetado, lo que resultará en un rendimiento significativamente menor para esa tarea.
-*   **Dependencias:** No te preocupes por instalarlas manualmente. El script `run.bat` se encarga de todo. Las dependencias clave incluyen: `PyQt6`, `Pillow`, `numpy`, `onnxruntime` (versión GPU o CPU según tu hardware), `pandas`, `requests`.
+    *   An **NVIDIA GPU** compatible with CUDA is highly recommended for the best performance in automatic image tagging.
+    *   If a compatible GPU is not detected, the application will use the **CPU** for tagging, resulting in significantly lower performance for that task.
+*   **Dependencies:** Don't worry about installing them manually. The `run.bat` script handles everything. Key dependencies include: `PyQt6`, `Pillow`, `numpy`, `onnxruntime`, `pandas`, `requests`.
 
-## Instalación ⚙️
+## Installation ⚙️
 
-1.  **Clona el repositorio:** Abre una terminal (cmd, PowerShell, Git Bash) y ejecuta:
+1.  **Clone the repository:** Open a terminal (cmd, PowerShell, Git Bash) and run:
     ```bash
-    git clone https://github.com/tu_usuario/ARC-EXPLORER.git 
-    # Reemplaza la URL con la URL real de tu repositorio si es diferente
+    git clone https://github.com/dmolmar/ArcShelf.git
+    # Replace the URL with the actual repository URL if different
     ```
-2.  **Navega al directorio:**
+2.  **Navigate to the directory:**
     ```bash
-    cd ARC-EXPLORER
+    cd ArcShelf
     ```
-3.  **Ejecuta el script de configuración:** Simplemente haz doble clic en `run.bat` o ejecútalo desde la terminal:
-    ```bash
-    run.bat
-    ```
-    Este script hará lo siguiente automáticamente:
-    *   Verificará si Python está instalado y accesible.
-    *   Creará un entorno virtual aislado llamado `.venv` si no existe.
-    *   Activará el entorno virtual.
-    *   Instalará o actualizará todas las dependencias de Python listadas en `requirements.txt`, asegurándose de instalar la versión correcta de `onnxruntime` (GPU o CPU) según tu hardware.
-    *   Descargará los archivos necesarios para el modelo de IA (`model.onnx` y `selected_tags.csv`) desde Hugging Face si no se encuentran en la carpeta `models/`.
-
-## Uso ▶️
-
-1.  Una vez completada la instalación mediante `run.bat`, puedes iniciar la aplicación volviendo a ejecutar:
+3.  **Run the setup script:** Simply double-click `run.bat` or run it from the terminal:
     ```bash
     run.bat
     ```
-2.  **Primeros pasos:**
-    *   Usa el botón **"Manage Directories..."** para añadir las carpetas que contienen tus imágenes. La aplicación las procesará para extraer metadatos y generar etiquetas (esto puede tardar un poco la primera vez, especialmente con colecciones grandes).
-    *   Explora tu colección en la vista de galería.
-    *   Haz clic en una imagen para verla en el panel de previsualización y consultar su información detallada y etiquetas en el panel de información.
-    *   Utiliza la barra de búsqueda superior para encontrar imágenes por etiquetas. Prueba a escribir etiquetas y mira las sugerencias.
+    This script will automatically:
+    *   Check if Python is installed and accessible.
+    *   Create an isolated virtual environment named `.venv` if it doesn't exist.
+    *   Activate the virtual environment.
+    *   Install or update all Python dependencies listed in `requirements.txt`, ensuring the correct version of `onnxruntime` (GPU or CPU) is installed based on your hardware.
+    *   Download the necessary AI model files (`model.onnx` and `selected_tags.csv`) from Hugging Face if they are not found in the `models/` folder.
 
-## Agradecimientos 🙏
+## Usage ▶️
 
-El etiquetado automático de imágenes es posible gracias al modelo **wd-eva02-large-tagger-v3** creado por **SmilingWolf**. Puedes encontrar más información sobre el modelo en Hugging Face:
+1.  Once the installation via `run.bat` is complete, you can start the application by running again:
+    ```bash
+    run.bat
+    ```
+2.  **First steps:**
+    *   Use the **"Manage Directories..."** button to add the folders containing your images. The application will process them to extract metadata and generate tags (this may take a while the first time, especially with large collections).
+    *   Explore your collection in the gallery view.
+    *   Click on an image to view it in the preview panel and check its detailed information and tags in the information panel.
+    *   Use the top search bar to find images by tags. Try typing tags and see the suggestions.
+
+## Acknowledgements 🙏
+
+Automatic image tagging is made possible thanks to the **wd-eva02-large-tagger-v3** model created by **SmilingWolf**. You can find more information about the model on Hugging Face:
 [https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3](https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3)
