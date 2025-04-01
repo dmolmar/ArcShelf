@@ -42,9 +42,8 @@ class SearchQueryEvaluator:
         result: Set[str] = set()
 
         if isinstance(node, TagNode):
+            # get_image_ids_by_tag now filters by directory scope internally
             result = self.get_image_ids_by_tag(node.tag)
-            # Filter results by selected directories *after* getting them by tag
-            result = self.filter_by_directory_scope(result)
 
         elif isinstance(node, AllImagesNode):
             # Returns all images within the selected directories scope
@@ -82,24 +81,45 @@ class SearchQueryEvaluator:
         return result
 
     def get_image_ids_by_tag(self, tag: str) -> Set[str]:
-        """Retrieves image IDs associated with a specific tag from the database."""
+        """
+        Retrieves image IDs associated with a specific tag from the database,
+        filtered by the currently selected directories.
+        """
+        # If no directories are selected, no images can match the scope.
+        if not self.selected_directories:
+            return set()
+
         try:
             with self.db.lock: # Use the database's lock
-                # Use a single connection for potentially multiple operations if needed
                 with sqlite3.connect(self.db.db_path) as conn:
                     conn.execute("PRAGMA query_only = ON")
                     cursor = conn.cursor()
-                    # Case-insensitive tag search might be desirable: WHERE lower(tags.name) = lower(?)
-                    cursor.execute("""
+
+                    # Build directory conditions
+                    dir_conditions = []
+                    dir_params = []
+                    for norm_dir in self.selected_directories:
+                         if not norm_dir.endswith('/'): norm_dir += '/'
+                         dir_conditions.append("i.path LIKE ?")
+                         dir_params.append(f"{norm_dir}%")
+                    dir_where_clause = " OR ".join(dir_conditions)
+
+                    # Combine tag and directory conditions
+                    # Case-insensitive tag search: lower(t.name) = lower(?)
+                    query = f"""
                         SELECT it.image_id
                         FROM image_tags it
                         JOIN tags t ON it.tag_id = t.id
-                        WHERE t.name = ?
-                    """, (tag,))
+                        JOIN images i ON it.image_id = i.id
+                        WHERE lower(t.name) = lower(?) AND ({dir_where_clause})
+                    """
+                    final_params = [tag] + dir_params
+
+                    cursor.execute(query, final_params)
                     result = {row[0] for row in cursor.fetchall()}
             return result
         except sqlite3.Error as e:
-            print(f"Database error getting images by tag '{tag}': {e}")
+            print(f"Database error getting images by tag '{tag}' within scope: {e}")
             return set()
 
     def get_all_image_ids_in_scope(self) -> Set[str]:

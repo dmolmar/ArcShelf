@@ -464,8 +464,8 @@ class DragDropArea(QGraphicsView):
             # Note: QGraphicsView scrolling is opposite to mouse movement
             hs = self.horizontalScrollBar()
             vs = self.verticalScrollBar()
-            hs.setValue(hs.value() - int(delta.x()))
-            vs.setValue(vs.value() - int(delta.y()))
+            hs.setValue(hs.value() - round(delta.x()))
+            vs.setValue(vs.value() - round(delta.y()))
 
             # Update the last pan point
             self._last_pan_point = current_pos

@@ -3,7 +3,8 @@ import os
 import threading
 import uuid
 from pathlib import Path
-from typing import List, Tuple, Optional, TYPE_CHECKING
+from typing import List, Tuple, Optional, TYPE_CHECKING, Dict # Removed DefaultDict from here
+from collections import defaultdict # Added defaultdict import
 from PIL import Image
 
 # Import the new normalization function
@@ -188,22 +189,24 @@ class Database:
                         # Insert new tags and prepare image_tags data
                         image_tags_to_insert = []
                         for pred in filtered_predictions:
-                            if pred.tag not in tag_ids_map:
-                                try:
-                                    cursor.execute("INSERT OR IGNORE INTO tags (name, category) VALUES (?, ?)", (pred.tag, pred.category))
-                                    cursor.execute("SELECT id FROM tags WHERE name = ?", (pred.tag,))
-                                    tag_id_row = cursor.fetchone()
-                                    if tag_id_row: tag_ids_map[pred.tag] = tag_id_row[0]
-                                    else: print(f"Warning: Could not get tag_id for tag '{pred.tag}' after insert."); continue
-                                except sqlite3.IntegrityError:
-                                     print(f"Integrity error inserting tag '{pred.tag}', likely already exists.")
-                                     cursor.execute("SELECT id FROM tags WHERE name = ?", (pred.tag,))
-                                     tag_id_row = cursor.fetchone()
-                                     if tag_id_row: tag_ids_map[pred.tag] = tag_id_row[0]
-                                     else: print(f"Warning: Could not get tag_id for tag '{pred.tag}' after integrity error."); continue
+                            tag_id = tag_ids_map.get(pred.tag)
+                            if tag_id is None:
+                                # Attempt to insert the tag if it wasn't found in our initial bulk fetch
+                                cursor.execute("INSERT OR IGNORE INTO tags (name, category) VALUES (?, ?)", (pred.tag, pred.category))
+                                # Fetch the ID again, whether it was just inserted or ignored (already existed)
+                                cursor.execute("SELECT id FROM tags WHERE name = ?", (pred.tag,))
+                                tag_id_row = cursor.fetchone()
+                                if tag_id_row:
+                                    tag_id = tag_id_row[0]
+                                    tag_ids_map[pred.tag] = tag_id # Cache it for potential future use in this loop
+                                else:
+                                    # This case should be rare if INSERT OR IGNORE works, but handles potential issues
+                                    print(f"Warning: Could not retrieve tag_id for '{pred.tag}' even after INSERT OR IGNORE attempt.")
+                                    continue # Skip this tag prediction if we can't get an ID
 
-                            if pred.tag in tag_ids_map:
-                                image_tags_to_insert.append((image_id, tag_ids_map[pred.tag], pred.confidence))
+                            # Only append if we successfully got a tag_id
+                            if tag_id is not None:
+                                image_tags_to_insert.append((image_id, tag_id, pred.confidence))
 
                         if image_tags_to_insert:
                             cursor.executemany("INSERT INTO image_tags (image_id, tag_id, confidence) VALUES (?, ?, ?)", image_tags_to_insert)
@@ -471,7 +474,7 @@ class Database:
                     # Combine image conditions
                     if image_conditions:
                         image_id_subquery += " WHERE " + " AND ".join(image_conditions)
-                    
+
                     # --- Build main query to get tag counts ---
                     final_params = list(image_params) # Copy params used for subquery
 
@@ -528,61 +531,93 @@ class Database:
             print(f"Database error getting image ID for {normalized_path}: {e}")
 
     def get_resolutions_for_paths(self, paths: List[str]) -> dict[str, Optional[str]]:
-        """Retrieves the resolution string for a list of image paths."""
+        """
+        Retrieves the resolution string for a list of image paths efficiently
+        using a temporary table and JOIN.
+        """
         if not paths:
             return {}
 
-        results = {}
-        # Normalize paths before querying
-        # Create a map from original path to normalized path
-        original_to_normalized_map = {p: normalize_path(p) for p in paths}
-        # Create a map from normalized path back to the *first* original path that normalized to it
-        # (Handles potential normalization collisions, though unlikely for full paths)
-        normalized_to_original_map = {norm_p: orig_p for orig_p, norm_p in original_to_normalized_map.items()}
-        
-        print(f"DEBUG: get_resolutions_for_paths - Processing {len(paths)} requested paths.")
-        
-        all_db_resolutions = {} # Store all resolutions from DB {normalized_path: resolution}
+        # Initialize results with None for all requested original paths
+        results = {path: None for path in paths}
+        # Create a mapping from normalized path back to a list of original paths
+        normalized_to_originals: Dict[str, List[str]] = defaultdict(list)
+        unique_normalized_paths: set[str] = set()
+        for p in paths:
+            if p: # Ensure path is not empty
+                normalized = normalize_path(p)
+                if normalized: # Ensure normalization didn't result in empty string
+                    unique_normalized_paths.add(normalized)
+                    normalized_to_originals[normalized].append(p)
+
+        if not unique_normalized_paths:
+            print("DEBUG: get_resolutions_for_paths - No valid normalized paths to query.")
+            return results # Return dict with Nones
+
+        db_resolutions: Dict[str, Optional[str]] = {} # {normalized_path_from_db: resolution}
         try:
             with self.lock:
-                conn = sqlite3.connect(self.db_path)
-                conn.text_factory = str # Ensure UTF-8 handling
-                cursor = conn.cursor()
-                # Fetch ALL paths and resolutions from the database
-                cursor.execute("SELECT path, resolution FROM images")
-                all_rows = cursor.fetchall()
-                conn.close()
-            
-            # Populate the dictionary with normalized paths from the DB
-            # Use COLLATE NOCASE logic here in Python for matching
-            all_db_resolutions = {normalize_path(db_path): resolution for db_path, resolution in all_rows}
+                # Use a single connection for the temporary table lifecycle
+                with sqlite3.connect(self.db_path, isolation_level=None) as conn: # Autocommit mode for temp table
+                    cursor = conn.cursor()
+                    try:
+                        # Create a temporary table
+                        cursor.execute("CREATE TEMP TABLE temp_paths_to_query (path TEXT PRIMARY KEY)")
 
-            # Now, lookup the requested paths in the fetched dictionary
-            results = {}
-            missing_count = 0
-            for original_path, normalized_path in original_to_normalized_map.items():
-                # Perform case-insensitive lookup equivalent in Python
-                resolution = all_db_resolutions.get(normalized_path)
-                results[original_path] = resolution
-                if resolution is None:
-                    # Log if a normalized path requested wasn't found in the full DB pull
-                    print(f"DEBUG: get_resolutions_for_paths - Normalized path '{normalized_path}' (from '{original_path}') not found in full DB results.")
-                    missing_count += 1
-            
-            if missing_count > 0:
-                 print(f"DEBUG: get_resolutions_for_paths - {missing_count} requested paths were not found in the full DB resolution data.")
+                        # Insert normalized paths into the temporary table
+                        # executemany expects a list of tuples
+                        paths_to_insert = [(p,) for p in unique_normalized_paths]
+                        cursor.executemany("INSERT INTO temp_paths_to_query (path) VALUES (?)", paths_to_insert)
+
+                        # Query by joining images with the temporary table
+                        # Use COLLATE NOCASE on the JOIN condition
+                        query = """
+                            SELECT i.path, i.resolution
+                            FROM images i
+                            JOIN temp_paths_to_query t ON i.path = t.path COLLATE NOCASE
+                        """
+                        cursor.execute(query)
+                        fetched_rows = cursor.fetchall()
+
+                    finally:
+                        # Ensure temporary table is dropped even if errors occur
+                        try:
+                            cursor.execute("DROP TABLE temp_paths_to_query")
+                        except sqlite3.Error as drop_err:
+                            # Log error if dropping fails, but don't raise over original error
+                            print(f"Warning: Could not drop temporary table temp_paths_to_query: {drop_err}")
+
+            # Populate the lookup dictionary using normalized paths from the DB results
+            for db_path, resolution in fetched_rows:
+                if db_path: # Ensure path from DB is not null/empty
+                    db_resolutions[normalize_path(db_path)] = resolution # Store using normalized key
+
+            print(f"DEBUG: get_resolutions_for_paths - Fetched {len(db_resolutions)} resolutions for {len(unique_normalized_paths)} unique requested paths using TEMP TABLE.")
 
         except sqlite3.Error as e:
-            print(f"DEBUG: get_resolutions_for_paths - DB Error fetching all resolutions: {e}")
-            print(f"Database error in get_resolutions_for_paths: {e}")
-            # Return None for all paths on error
-            results = {path: None for path in paths}
-        
-        # Log a sample of the final returned dictionary
-        # print(f"DEBUG: get_resolutions_for_paths - Returning results dict. Example: {list(results.items())[:5]}") # Removed verbose debug log
+            print(f"Database error fetching specific resolutions using TEMP TABLE: {e}")
+            # Return dict with Nones if DB fetch fails
+            return results
+        except Exception as e:
+            print(f"Unexpected error fetching specific resolutions using TEMP TABLE: {e}")
+            return results
+
+        # Map the fetched resolutions back to the original input paths
+        missing_count = 0
+        for normalized_key, original_paths_list in normalized_to_originals.items():
+            resolution = db_resolutions.get(normalized_key) # Lookup using normalized key
+            if resolution is None:
+                 # This normalized path was queried but not found in the DB results
+                 print(f"DEBUG: get_resolutions_for_paths - Normalized path '{normalized_key}' not found in DB results (TEMP TABLE method).")
+                 missing_count += 1
+            # Assign the found resolution (or None) to all original paths that normalized to this key
+            for original_path in original_paths_list:
+                results[original_path] = resolution
+
+        if missing_count > 0:
+            print(f"DEBUG: get_resolutions_for_paths - {missing_count} queried normalized paths were not found in the DB (TEMP TABLE method).")
+
         return results
-
-
 
     def get_image_ids_in_directory(self, directory: str) -> List[str]:
         """Retrieves all image UUIDs within a given directory (recursive)."""

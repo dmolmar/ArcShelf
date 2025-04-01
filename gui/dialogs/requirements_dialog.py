@@ -68,10 +68,6 @@ REQ_FILE = Path(config.BASE_DIR) / "requirements.txt"
 MODEL_URL = "https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3/resolve/main/model.onnx"
 TAGS_URL = "https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3/raw/main/selected_tags.csv"
 
-# --- Model Download URLs ---
-MODEL_URL = "https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3/resolve/main/model.onnx"
-TAGS_URL = "https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3/raw/main/selected_tags.csv"
-
 # --- Static Check Function ---
 def check_critical_requirements() -> bool:
     """

@@ -107,7 +107,7 @@ class ImageGallery(QMainWindow):
         self.total_images_to_process: int = 0
         self.processed_images_count: int = 0
         self.all_images: List[str] = []
-        self.aspect_ratios: Dict[str, float] = {}
+        # self.aspect_ratios removed - calculated on demand
         self.current_page: int = 1
         self.total_pages: int = 1
         self.page_size: int = 50
@@ -137,6 +137,7 @@ class ImageGallery(QMainWindow):
 
         self.aspect_ratios: Dict[str, float] = {} # Cache for calculated aspect ratios
         self.image_resolutions: Dict[str, Optional[str]] = {} # Cache for resolution strings from DB
+        self.image_metadata: Dict[str, Dict[str, Any]] = {} # Cache for mod_time, size from DB
 
         # Load initial active directories from DB
         self._load_initial_active_directories()
@@ -560,10 +561,12 @@ class ImageGallery(QMainWindow):
             h_row_spacing = 10 # Defined in _layout_and_add_row
 
             for img_path in images_on_page:
-                aspect_ratio = self.aspect_ratios.get(img_path)
+                # Calculate aspect ratio directly
+                aspect_ratio = self.get_image_aspect_ratio(img_path)
                 if aspect_ratio is None:
-                    aspect_ratio = self.get_image_aspect_ratio(img_path)
-                    if aspect_ratio is None: continue # Skip if problematic
+                    # If ratio cannot be determined (e.g., missing resolution), skip this image
+                    print(f"Warning: Skipping image {img_path} in arrange_rows due to missing aspect ratio.")
+                    continue
 
                 img_width_at_target = int(aspect_ratio * target_row_height)
                 potential_row_width = current_row_width + img_width_at_target
@@ -616,10 +619,23 @@ class ImageGallery(QMainWindow):
         num_images = len(row_widgets)
         if num_images == 0: return
 
-        total_aspect_ratio = sum(self.aspect_ratios.get(label.image_path, 1.0) for label in row_widgets)
-        # Calculate total spacing needed based on the number of gaps
-        total_spacing = h_spacing * (num_images - 1) if num_images > 1 else 0
+        # Calculate total aspect ratio on the fly
+        total_aspect_ratio = 0
+        valid_widgets_for_row = [] # Keep track of widgets for which ratio could be calculated
+        for label in row_widgets:
+            ratio = self.get_image_aspect_ratio(label.image_path)
+            if ratio is not None:
+                total_aspect_ratio += ratio
+                valid_widgets_for_row.append((label, ratio)) # Store label and its calculated ratio
+            else:
+                print(f"Warning: Could not get aspect ratio for {label.image_path} in _layout_and_add_row. Skipping.")
 
+        # Update num_images based on valid widgets
+        num_images = len(valid_widgets_for_row)
+        if num_images == 0: return # No valid images left for this row
+
+        # Calculate total spacing needed based on the number of valid gaps
+        total_spacing = h_spacing * (num_images - 1) if num_images > 1 else 0
         # Calculate the optimal height to fill the available width
         calculated_height = int((available_width - total_spacing) / total_aspect_ratio) if total_aspect_ratio > 0 else target_height
 
@@ -637,8 +653,9 @@ class ImageGallery(QMainWindow):
         row_layout.setContentsMargins(0, 0, 0, 0) # No margins within the row frame
 
         total_calculated_width = 0
-        for label in row_widgets:
-            aspect_ratio = self.aspect_ratios.get(label.image_path, 1.0)
+        # Iterate through the widgets for which we successfully calculated the aspect ratio
+        for label, aspect_ratio in valid_widgets_for_row:
+            # aspect_ratio is already calculated and validated (not None)
             # Calculate width based on final row height and aspect ratio
             img_width = max(1, int(aspect_ratio * final_row_height))
             img_height = final_row_height
@@ -685,9 +702,10 @@ class ImageGallery(QMainWindow):
             # Remove the entry regardless of whether the label still exists
             del self.thumbnail_loaders[image_id]
         else:
-            # This warning should ideally not happen now if the key is stable,
-            # but we keep it for debugging unexpected scenarios.
-            print(f"Warning: Image ID {image_id} not found in loaders dict after thumbnail loaded.")
+            # This can happen if the page is changed before a thumbnail finishes loading.
+            # The result is simply discarded, so we don't need to print a warning.
+            # print(f"Warning: Image ID {image_id} not found in loaders dict after thumbnail loaded.") # Suppressed warning
+            pass # Result is discarded, no action needed.
         # pixmap.detach() # Maybe needed?
 
     def update_total_images_label(self):
@@ -1038,61 +1056,78 @@ class ImageGallery(QMainWindow):
         self.threadpool.start(worker)
 
     def _filter_paths_for_processing(self, paths: List[str]) -> List[str]:
-        """Checks DB (mod time, size) to find paths needing processing."""
+        """
+        Checks DB (mod time, size) efficiently to find paths needing processing
+        by fetching existing metadata in bulk first.
+        """
         paths_to_process = []
         print(f"Filtering {len(paths)} potential paths for processing...")
-        checked_count = 0
+        if not paths:
+            return []
+
+        # 1. Fetch existing metadata from DB for all potentially relevant paths
+        db_metadata: Dict[str, Tuple[Optional[float], Optional[int]]] = {}
         try:
-             with self.db.lock, sqlite3.connect(self.db.db_path) as conn:
-                  cursor = conn.cursor()
-                  for img_path in paths:
-                       checked_count += 1
-                       if checked_count % 500 == 0: # Print progress
-                           print(f"  Checked {checked_count}/{len(paths)} paths...")
+            # Normalize paths for DB lookup key consistency
+            normalized_paths_to_check = {normalize_path(p) for p in paths if p}
+            if not normalized_paths_to_check:
+                return [] # No valid paths to check
 
-                       needs_processing = True # Assume needs processing unless proven otherwise
-                       try:
-                            # Get current file info first
-                            current_mod_time = os.path.getmtime(img_path)
-                            current_file_size = os.path.getsize(img_path)
-
-                            # Check database
-                            normalized_path = normalize_path(img_path) # Use imported function
-                            # --- MODIFICATION HERE: Select size, use COLLATE NOCASE ---
-                            cursor.execute("SELECT modification_time, file_size FROM images WHERE path = ? COLLATE NOCASE", (normalized_path,))
-                            result = cursor.fetchone()
-
-                            if result:
-                                stored_mod_time, stored_file_size = result
-                                # Check if mod time AND size match (within tolerance for time)
-                                time_matches = abs(current_mod_time - stored_mod_time) <= 1 if stored_mod_time is not None else False
-                                size_matches = current_file_size == stored_file_size if stored_file_size is not None else False
-
-                                if time_matches and size_matches:
-                                    needs_processing = False # Skip if both time and size match
-                            # else: image not in DB, needs_processing remains True
-
-                       except FileNotFoundError:
-                            print(f"  Skipping missing file during filter: {img_path}")
-                            needs_processing = False # Cannot process if file doesn't exist
-                       except OSError as e:
-                            print(f"  Error accessing file during filter {img_path}: {e}")
-                            # Decide whether to process or skip on error; skipping is safer
-                            needs_processing = False
-                       except sqlite3.Error as e:
-                            print(f"  DB error during filter for {img_path}: {e}")
-                            # If DB error, assume processing is needed to be safe? Or skip?
-                            # Let's assume processing is needed if DB check fails.
-                            needs_processing = True
-
-                       if needs_processing:
-                            paths_to_process.append(img_path)
-
+            with self.db.lock, sqlite3.connect(self.db.db_path) as conn:
+                cursor = conn.cursor()
+                # Fetch data for paths that *might* be in the DB (using normalized paths)
+                placeholders = ','.join('?' * len(normalized_paths_to_check))
+                # Use COLLATE NOCASE for matching
+                query = f"SELECT path, modification_time, file_size FROM images WHERE path IN ({placeholders}) COLLATE NOCASE"
+                cursor.execute(query, list(normalized_paths_to_check))
+                for db_path, mod_time, size in cursor.fetchall():
+                    # Store using the normalized path from the DB result for exact matching later
+                    db_metadata[normalize_path(db_path)] = (mod_time, size)
+            print(f"  Fetched metadata for {len(db_metadata)} paths from DB.")
         except sqlite3.Error as e:
-             print(f"DB error during bulk filter setup: {e}")
-             # On major DB error, maybe process all as a fallback? Or none?
-             # Returning all might lead to excessive processing. Let's return empty.
-             return [] # Return empty list on major DB error
+            print(f"  DB error fetching bulk metadata: {e}. Proceeding without DB checks (will process all existing files).")
+            # Fallback: If DB query fails, we might process more than needed, but it's safer than processing none.
+            db_metadata = {} # Ensure it's empty
+        except Exception as e:
+             print(f"  Unexpected error fetching bulk metadata: {e}. Proceeding without DB checks.")
+             db_metadata = {}
+
+        # 2. Iterate through file system paths and compare
+        checked_count = 0
+        for img_path in paths:
+            checked_count += 1
+            if checked_count % 500 == 0: # Print progress
+                print(f"  Checked {checked_count}/{len(paths)} paths...")
+
+            needs_processing = True # Assume needs processing unless proven otherwise
+            try:
+                # Get current file info first
+                current_mod_time = os.path.getmtime(img_path)
+                current_file_size = os.path.getsize(img_path)
+
+                # Check against fetched DB metadata using normalized path
+                normalized_img_path = normalize_path(img_path)
+                stored_data = db_metadata.get(normalized_img_path)
+
+                if stored_data:
+                    stored_mod_time, stored_file_size = stored_data
+                    # Check if mod time AND size match (within tolerance for time)
+                    time_matches = abs(current_mod_time - stored_mod_time) <= 1 if stored_mod_time is not None else False
+                    size_matches = current_file_size == stored_file_size if stored_file_size is not None else False
+
+                    if time_matches and size_matches:
+                        needs_processing = False # Skip if both time and size match
+                # else: image not found in DB metadata, needs_processing remains True
+
+            except FileNotFoundError:
+                # print(f"  Skipping missing file during filter: {img_path}") # Less verbose
+                needs_processing = False # Cannot process if file doesn't exist
+            except OSError as e:
+                print(f"  Warning: Error accessing file during filter {img_path}: {e}")
+                needs_processing = False # Skip on FS error
+
+            if needs_processing:
+                paths_to_process.append(img_path)
 
         print(f"Filtering complete. {len(paths_to_process)} paths require processing.")
         return paths_to_process
@@ -1658,9 +1693,16 @@ class ImageGallery(QMainWindow):
                     dir_conditions.append("path LIKE ?"); params.append(f"{norm_dir}%")
                 if not dir_conditions: return []
                 where_clause = " OR ".join(dir_conditions)
-                query = f"SELECT path FROM images WHERE {where_clause}"
-                cursor.execute(query, params); image_paths = [row[0] for row in cursor.fetchall()]
-        except sqlite3.Error as e: print(f"DB Error getting all images: {e}"); return []
+                # Fetch path, mod_time, size
+                query = f"SELECT path, modification_time, file_size FROM images WHERE {where_clause}"
+                cursor.execute(query, params)
+                # Store results temporarily, will be processed in _update_gallery_display
+                self._current_search_results_with_metadata = cursor.fetchall()
+                image_paths = [row[0] for row in self._current_search_results_with_metadata]
+        except sqlite3.Error as e:
+            print(f"DB Error getting all images: {e}")
+            self._current_search_results_with_metadata = [] # Clear on error
+            return []
         print(f"  Returning {len(image_paths)} paths from active directories.")
         return image_paths
 
@@ -1721,17 +1763,27 @@ class ImageGallery(QMainWindow):
         return sorted_paths
 
     def _get_image_paths_from_ids(self, image_ids: Set[str]) -> List[str]:
+        """Fetches paths and metadata for a given set of image IDs."""
         print(f"ImageGallery: _get_image_paths_from_ids for {len(image_ids)} IDs")
-        if not image_ids: return []
+        if not image_ids:
+            self._current_search_results_with_metadata = [] # Ensure cleared
+            return []
         image_paths = []
         try:
             with self.db.lock, sqlite3.connect(self.db.db_path) as conn:
                 cursor = conn.cursor(); id_placeholders = ','.join('?' for _ in image_ids)
-                query = f"SELECT path FROM images WHERE id IN ({id_placeholders})"
-                cursor.execute(query, list(image_ids)); image_paths = [row[0] for row in cursor.fetchall()]
-        except sqlite3.Error as e: print(f"DB Error getting paths from IDs: {e}"); return []
+                # Fetch path, mod_time, size
+                query = f"SELECT path, modification_time, file_size FROM images WHERE id IN ({id_placeholders})"
+                cursor.execute(query, list(image_ids))
+                # Store results temporarily, will be processed in _update_gallery_display
+                self._current_search_results_with_metadata = cursor.fetchall()
+                image_paths = [row[0] for row in self._current_search_results_with_metadata]
+        except sqlite3.Error as e:
+            print(f"DB Error getting paths from IDs: {e}")
+            self._current_search_results_with_metadata = [] # Clear on error
+            return []
         print(f"  Found {len(image_paths)} paths for IDs.")
-        return image_paths # Note: This doesn't re-apply active_dir filter, assuming evaluator did
+        return image_paths
 
     def _filter_images_by_existence(self, image_paths: List[str]) -> List[str]:
         print(f"ImageGallery: _filter_images_by_existence (checking {len(image_paths)} paths)")
@@ -1751,22 +1803,44 @@ class ImageGallery(QMainWindow):
         else:
             print(f"  Sorting by: {sort_by}, Order: {'Desc' if sort_order_desc else 'Asc'}")
             sort_key_func: Optional[Callable[[str], Any]] = None
+            default_sort_value = float('-inf') if sort_order_desc else float('inf') # Value for missing data
             try:
-                if sort_by == 'Date': sort_key_func = lambda p: Path(p).stat().st_mtime
-                elif sort_by == 'File Size': sort_key_func = lambda p: Path(p).stat().st_size
+                if sort_by == 'Date':
+                    def get_mtime_from_cache(p: str) -> float:
+                        metadata = self.image_metadata.get(normalize_path(p))
+                        if metadata and metadata.get('mtime') is not None:
+                            return metadata['mtime']
+                        # Fallback (should be rare if metadata is populated)
+                        try: return Path(p).stat().st_mtime
+                        except Exception: return default_sort_value
+                    sort_key_func = get_mtime_from_cache
+                elif sort_by == 'File Size':
+                    def get_size_from_cache(p: str) -> int:
+                        metadata = self.image_metadata.get(normalize_path(p))
+                        if metadata and metadata.get('size') is not None:
+                            return metadata['size']
+                        # Fallback
+                        try: return Path(p).stat().st_size
+                        except Exception: return -1 # Or default_sort_value if treating size differently
+                    sort_key_func = get_size_from_cache
                 elif sort_by == 'Resolution':
-                    # Use pre-fetched resolution data instead of opening files
+                    # Use pre-fetched resolution data (existing logic is fine)
                     def get_pixels_from_cache(p: str) -> int:
-                        res_str = self.image_resolutions.get(p)
+                        res_str = self.image_resolutions.get(p) # Path 'p' is already normalized from the list
                         if res_str and 'x' in res_str:
                             try:
                                 width_str, height_str = res_str.split('x', 1)
                                 return int(width_str) * int(height_str)
-                            except (ValueError, TypeError):
-                                return 0 # Default for invalid format
-                        return 0 # Default if resolution not found
+                            except (ValueError, TypeError): return 0
+                        return 0
                     sort_key_func = get_pixels_from_cache
-                elif sort_by == 'Aspect Ratio': sort_key_func = self.get_image_aspect_ratio
+                elif sort_by == 'Aspect Ratio':
+                    # Define lambda to get ratio, handling None return
+                    def get_ratio_sort_key(p: str) -> float:
+                        ratio = self.get_image_aspect_ratio(p)
+                        # Use default sort value if ratio couldn't be calculated
+                        return ratio if ratio is not None else default_sort_value
+                    sort_key_func = get_ratio_sort_key
                 # Add safety checks for file existence within lambda if needed
             except Exception as e: print(f"Error defining sort key for {sort_by}: {e}")
 
@@ -1783,25 +1857,26 @@ class ImageGallery(QMainWindow):
         print(f"ImageGallery: _update_gallery_display with {len(image_paths)} images")
         self.all_images = image_paths # Store the list of paths to display
 
+        # Populate metadata cache from the results fetched during search
+        self.image_metadata.clear()
+        if hasattr(self, '_current_search_results_with_metadata') and self._current_search_results_with_metadata:
+            print(f"  Populating metadata cache from {len(self._current_search_results_with_metadata)} search results...")
+            for path, mod_time, size in self._current_search_results_with_metadata:
+                # Use normalized path as key for consistency
+                self.image_metadata[normalize_path(path)] = {'mtime': mod_time, 'size': size}
+            # Clear the temporary storage
+            self._current_search_results_with_metadata = []
+        else:
+             print("  Warning: No metadata found in _current_search_results_with_metadata. Sorting by Date/Size might be slow.")
+
         # Fetch resolution strings for these paths from the database
         print("  Fetching resolutions from DB...")
         self.image_resolutions = self.db.get_resolutions_for_paths(image_paths)
         print(f"  Fetched {len(self.image_resolutions)} resolutions.")
 
-        # Clear and repopulate the aspect ratio cache using the fetched resolutions
-        self.aspect_ratios.clear()
-        print("  Calculating aspect ratios from resolutions...")
-        missing_res_count = 0
-        for img_path in self.all_images:
-            # get_image_aspect_ratio will now use self.image_resolutions
-            ratio = self.get_image_aspect_ratio(img_path)
-            if ratio is None:
-                missing_res_count += 1
-                ratio = 1.0 # Default aspect ratio if resolution is missing/invalid
-            self.aspect_ratios[img_path] = ratio
-        if missing_res_count > 0:
-             print(f"  Warning: Could not determine aspect ratio for {missing_res_count} images (missing/invalid resolution in DB?). Used default 1.0.")
-        print("  Aspect ratios updated.")
+        # Aspect ratios will be calculated on demand using self.image_resolutions.
+        # Removed population of self.aspect_ratios cache here.
+
         self.total_pages = max(1, math.ceil(len(self.all_images) / self.page_size))
         self.total_pages_label.setText(f"of {self.total_pages}")
         self.page_number_edit.setMaximum(self.total_pages)
@@ -1816,40 +1891,31 @@ class ImageGallery(QMainWindow):
         except Exception: return 0
 
     def get_image_aspect_ratio(self, path: str) -> Optional[float]:
-        # 1. Check memory cache first
-        if path in self.aspect_ratios:
-            return self.aspect_ratios[path]
-
-        # 2. Check pre-loaded resolution string cache
+        """Calculates aspect ratio directly from the cached resolution string."""
+        # Check pre-loaded resolution string cache
         resolution_str = self.image_resolutions.get(path)
-        if resolution_str is None:
-            # MOVED LOG: Only print lookup details if resolution is None
-            print(f"DEBUG: get_image_aspect_ratio - Lookup for path '{path}': Found resolution '{resolution_str}'")
-            print(f"DEBUG: get_image_aspect_ratio - Resolution string MISSING in cache for: {path}") # ADDED LOG
-        
+
         if resolution_str and 'x' in resolution_str:
             try:
                 width_str, height_str = resolution_str.split('x', 1)
                 width = int(width_str)
                 height = int(height_str)
                 if height > 0:
-                    ratio = width / height
-                    self.aspect_ratios[path] = ratio # Cache the calculated ratio
-                    return ratio
+                    return width / height
                 else:
                     # Handle zero height case
-                    self.aspect_ratios[path] = 1.0 # Cache default
                     return 1.0
             except (ValueError, TypeError) as e:
                 # Handle parsing errors (invalid format in DB?)
-                print(f"DEBUG: get_image_aspect_ratio - Could not PARSE resolution string '{resolution_str}' for {path}: {e}") # MODIFIED LOG
-                self.aspect_ratios[path] = 1.0 # Cache default
+                print(f"DEBUG: get_image_aspect_ratio - Could not PARSE resolution string '{resolution_str}' for {path}: {e}")
                 return 1.0 # Return default ratio on error
-        
-        # 3. If resolution string not found or invalid (no 'x'), return None
-        # Let's return None to indicate failure, the calling code handles default.
-        # print(f"Warning: No valid resolution string found for {path} in self.image_resolutions.")
-        return None
+        else:
+            # Log if resolution string is missing or invalid format
+            if resolution_str is None:
+                print(f"DEBUG: get_image_aspect_ratio - Resolution string MISSING in cache for: {path}")
+            else:
+                 print(f"DEBUG: get_image_aspect_ratio - Invalid resolution string format '{resolution_str}' for: {path}")
+            return None # Indicate failure to calculate
 
     def unload_model_safely(self):
         print("Unloading model..."); self.model.unload_model(); print("Model unloaded.")

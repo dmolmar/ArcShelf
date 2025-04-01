@@ -34,21 +34,8 @@ from utils.path_utils import normalize_path
 if TYPE_CHECKING:
     from gui.main_window import ImageGallery # The main application window
 
-# Placeholder for utility function - move later
-def human_readable_size(size_bytes: int) -> str:
-    """Converts size in bytes to human-readable string."""
-    if size_bytes is None or size_bytes < 0: return "N/A" # Handle None
-    if size_bytes == 0: return "0 B"
-    size_name = ("B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB")
-    try:
-        i = int(math.floor(math.log(size_bytes, 1024)))
-        i = max(0, min(i, len(size_name) - 1)) # Clamp index
-        p = math.pow(1024, i)
-        s = round(size_bytes / p, 2)
-        return f"{s} {size_name[i]}"
-    except (ValueError, OverflowError):
-        return f"{size_bytes} B"
-
+# Import utility function from main window (Ideally move to utils later)
+from gui.main_window import human_readable_size
 
 class ManageDirectoriesDialog(QDialog):
     """Dialog for managing image directories, processing, and duplicate detection."""

@@ -5,7 +5,6 @@ from pathlib import Path
 
 # Imports - Assuming run.bat has installed requirements, these should succeed.
 # If they fail here, it indicates a deeper issue (e.g., corrupted install).
-import traceback # Keep for general error handling
 from PyQt6.QtWidgets import QApplication, QMessageBox # Keep QMessageBox for error popups
 from PyQt6.QtGui import QIcon, QImageReader
 from gui.main_window import ImageGallery
