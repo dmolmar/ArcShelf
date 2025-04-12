@@ -118,9 +118,8 @@ class Database:
             with self.lock:
                 with sqlite3.connect(self.db_path) as conn:
                     cursor = conn.cursor()
-                    # --- MODIFICATION HERE: Added COLLATE NOCASE ---
-                    cursor.execute("SELECT id, modification_time, file_size, resolution FROM images WHERE path = ? COLLATE NOCASE", (normalized_path,))
-                    # --- END MODIFICATION ---
+                    # Ensure consistent path matching (NO COLLATE NOCASE, rely on Python normalization)
+                    cursor.execute("SELECT id, modification_time, file_size, resolution FROM images WHERE path = ?", (normalized_path,))
                     row = cursor.fetchone()
 
                     image_id = None
@@ -370,8 +369,8 @@ class Database:
                     # Read-only access, potentially faster
                     conn.execute("PRAGMA query_only = ON")
                     cursor = conn.cursor()
-                    # Use COLLATE NOCASE for case-insensitive path matching
-                    cursor.execute("SELECT id, rating FROM images WHERE path = ? COLLATE NOCASE", (normalized_path,))
+                    # Use exact path matching (rely on Python normalization)
+                    cursor.execute("SELECT id, rating FROM images WHERE path = ?", (normalized_path,))
                     row = cursor.fetchone()
                     if row:
                         image_id, rating = row
@@ -523,8 +522,8 @@ class Database:
                 with sqlite3.connect(self.db_path) as conn:
                     conn.execute("PRAGMA query_only = ON")
                     cursor = conn.cursor()
-                    # Use COLLATE NOCASE for case-insensitive path matching
-                    cursor.execute("SELECT id FROM images WHERE path = ? COLLATE NOCASE", (normalized_path,))
+                    # Use exact path matching (rely on Python normalization)
+                    cursor.execute("SELECT id FROM images WHERE path = ?", (normalized_path,))
                     row = cursor.fetchone()
                     return row[0] if row else None
         except sqlite3.Error as e:
@@ -570,11 +569,11 @@ class Database:
                         cursor.executemany("INSERT INTO temp_paths_to_query (path) VALUES (?)", paths_to_insert)
 
                         # Query by joining images with the temporary table
-                        # Use COLLATE NOCASE on the JOIN condition
+                        # Use exact path matching (rely on Python normalization)
                         query = """
                             SELECT i.path, i.resolution
                             FROM images i
-                            JOIN temp_paths_to_query t ON i.path = t.path COLLATE NOCASE
+                            JOIN temp_paths_to_query t ON i.path = t.path
                         """
                         cursor.execute(query)
                         fetched_rows = cursor.fetchall()

@@ -613,6 +613,9 @@ class ImageGallery(QMainWindow):
                 pass
             # --- End Add ---
 
+        # Always scroll to top after arranging rows (page change, refresh, etc.)
+        self.scroll_area.verticalScrollBar().setValue(0)
+
     # --- CHANGE: Add h_spacing parameter ---
     def _layout_and_add_row(self, row_widgets: List[ImageLabel], available_width: int, target_height: int, h_spacing: int, is_last_row: bool):
     # --- END CHANGE ---
@@ -1065,31 +1068,66 @@ class ImageGallery(QMainWindow):
         if not paths:
             return []
 
-        # 1. Fetch existing metadata from DB for all potentially relevant paths
+        # problematic_filenames set removed
+
+        # 1. Fetch existing metadata from DB using a temporary table for robustness
         db_metadata: Dict[str, Tuple[Optional[float], Optional[int]]] = {}
+        fetched_rows = []
         try:
-            # Normalize paths for DB lookup key consistency
-            normalized_paths_to_check = {normalize_path(p) for p in paths if p}
-            if not normalized_paths_to_check:
+            # Get unique, non-empty normalized paths
+            unique_normalized_paths: set[str] = set()
+            for p in paths:
+                if p: # Ensure path is not empty
+                    normalized = normalize_path(p)
+                    if normalized: # Ensure normalization didn't result in empty string
+                        unique_normalized_paths.add(normalized)
+
+            if not unique_normalized_paths:
+                print("  No valid normalized paths to query for metadata.")
                 return [] # No valid paths to check
 
-            with self.db.lock, sqlite3.connect(self.db.db_path) as conn:
-                cursor = conn.cursor()
-                # Fetch data for paths that *might* be in the DB (using normalized paths)
-                placeholders = ','.join('?' * len(normalized_paths_to_check))
-                # Use COLLATE NOCASE for matching
-                query = f"SELECT path, modification_time, file_size FROM images WHERE path IN ({placeholders}) COLLATE NOCASE"
-                cursor.execute(query, list(normalized_paths_to_check))
-                for db_path, mod_time, size in cursor.fetchall():
-                    # Store using the normalized path from the DB result for exact matching later
-                    db_metadata[normalize_path(db_path)] = (mod_time, size)
-            print(f"  Fetched metadata for {len(db_metadata)} paths from DB.")
+            # Use temporary table approach
+            with self.db.lock:
+                # Use a single connection for the temporary table lifecycle
+                # Use autocommit mode for temp table operations
+                with sqlite3.connect(self.db.db_path, isolation_level=None) as conn:
+                    cursor = conn.cursor()
+                    try:
+                        # Create a temporary table
+                        cursor.execute("CREATE TEMP TABLE temp_paths_metadata_query (path TEXT PRIMARY KEY)")
+
+                        # Insert normalized paths into the temporary table
+                        paths_to_insert = [(p,) for p in unique_normalized_paths]
+                        cursor.executemany("INSERT INTO temp_paths_metadata_query (path) VALUES (?)", paths_to_insert)
+
+                        # Query by joining images with the temporary table (NO COLLATE NOCASE)
+                        query = """
+                            SELECT i.path, i.modification_time, i.file_size
+                            FROM images i
+                            JOIN temp_paths_metadata_query t ON i.path = t.path
+                        """
+                        cursor.execute(query)
+                        fetched_rows = cursor.fetchall()
+
+                    finally:
+                        # Ensure temporary table is dropped even if errors occur
+                        try:
+                            cursor.execute("DROP TABLE temp_paths_metadata_query")
+                        except sqlite3.Error as drop_err:
+                            print(f"Warning: Could not drop temporary table temp_paths_metadata_query: {drop_err}")
+
+            # Populate the lookup dictionary using normalized paths from the DB results
+            for db_path, mod_time, size in fetched_rows:
+                if db_path: # Ensure path from DB is not null/empty
+                    db_metadata[normalize_path(db_path)] = (mod_time, size) # Store using normalized key
+
+            print(f"  Fetched metadata for {len(db_metadata)} paths from DB using TEMP TABLE.")
+
         except sqlite3.Error as e:
-            print(f"  DB error fetching bulk metadata: {e}. Proceeding without DB checks (will process all existing files).")
-            # Fallback: If DB query fails, we might process more than needed, but it's safer than processing none.
-            db_metadata = {} # Ensure it's empty
+            print(f"  DB error fetching bulk metadata using TEMP TABLE: {e}. Proceeding without DB checks (will process all existing files).")
+            db_metadata = {} # Ensure it's empty on error
         except Exception as e:
-             print(f"  Unexpected error fetching bulk metadata: {e}. Proceeding without DB checks.")
+             print(f"  Unexpected error fetching bulk metadata using TEMP TABLE: {e}. Proceeding without DB checks.")
              db_metadata = {}
 
         # 2. Iterate through file system paths and compare
@@ -1099,7 +1137,9 @@ class ImageGallery(QMainWindow):
             if checked_count % 500 == 0: # Print progress
                 print(f"  Checked {checked_count}/{len(paths)} paths...")
 
+            # Initialize needs_processing here
             needs_processing = True # Assume needs processing unless proven otherwise
+
             try:
                 # Get current file info first
                 current_mod_time = os.path.getmtime(img_path)
@@ -1108,6 +1148,8 @@ class ImageGallery(QMainWindow):
                 # Check against fetched DB metadata using normalized path
                 normalized_img_path = normalize_path(img_path)
                 stored_data = db_metadata.get(normalized_img_path)
+
+                # Debugging block removed
 
                 if stored_data:
                     stored_mod_time, stored_file_size = stored_data
@@ -1127,6 +1169,8 @@ class ImageGallery(QMainWindow):
                 needs_processing = False # Skip on FS error
 
             if needs_processing:
+                # Debugging print removed
+
                 paths_to_process.append(img_path)
 
         print(f"Filtering complete. {len(paths_to_process)} paths require processing.")
@@ -1149,6 +1193,8 @@ class ImageGallery(QMainWindow):
         while not image_queue.empty():
             img_path = image_queue.get_nowait()
             try:
+                # Second debug block moved to _filter_paths_for_processing
+
                 if not Path(img_path).is_file():
                      if status_callback: status_callback(f"Skipping missing: {os.path.basename(img_path)}\n")
                      self.processed_images_count += 1
@@ -2093,6 +2139,6 @@ class ImageGallery(QMainWindow):
     # --- Cleanup ---
     def closeEvent(self, event):
         self.stop_slideshow() # Ensure slideshow stops cleanly
-        self.unload_model_safely()
+        # self.unload_model_safely() # REMOVED: Handled by QApplication.aboutToQuit signal
         # Wait for threadpool to finish?
         # self.threadpool.waitForDone()

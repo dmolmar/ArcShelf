@@ -547,15 +547,21 @@ class RequirementsDialog(QDialog):
 
             # Check specific ONNX requirement
             onnx_req_base_lower = "onnxruntime-gpu" if results["gpu_detected"] else "onnxruntime"
+            min_onnx_version = "1.15.1"
             if onnx_req_base_lower in installed_packages:
-                 onnx_found_correctly = True
-                 progress_callback(f"   Found: {onnx_req_base_lower} (Version: {installed_packages[onnx_req_base_lower]})")
-                 # If GPU, ideally check if CUDA extra was installed, but pip list doesn't easily show extras.
-                 # Assume OK if base package is present for now. Installation step will use [cuda].
+                installed_ver = installed_packages[onnx_req_base_lower]
+                if installed_ver == min_onnx_version:
+                    onnx_found_correctly = True
+                    progress_callback(f"   Found: {onnx_req_base_lower} (Version: {installed_ver})")
+                else:
+                    all_reqs_found = False
+                    onnx_found_correctly = False
+                    missing_list.append(f"{onnx_req_base_lower}=={min_onnx_version}")
+                    progress_callback(f"   FOUND BUT WRONG VERSION: {onnx_req_base_lower} (Version: {installed_ver}) - Requires exactly {min_onnx_version}")
             else:
-                 all_reqs_found = False # If ONNX is missing, overall packages are not OK
-                 missing_list.append(results["onnx_package_needed"]) # Add the specific needed one
-                 progress_callback(f"   MISSING: {results['onnx_package_needed']}")
+                all_reqs_found = False # If ONNX is missing, overall packages are not OK
+                missing_list.append(results["onnx_package_needed"]) # Add the specific needed one
+                progress_callback(f"   MISSING: {results['onnx_package_needed']}")
 
             results["packages_ok"] = all_reqs_found and onnx_found_correctly # Both base and correct ONNX needed
             results["onnx_ok"] = onnx_found_correctly
@@ -646,21 +652,17 @@ class RequirementsDialog(QDialog):
         # progress_callback is used directly below
         print("DEBUG: run_install_worker started.") # DEBUG LOG
         progress_callback("--- Starting Installation ---")
-        pip_install_ok = False # Flag to track pip install success
-        model_files_ok = True # Assume OK unless download fails
+        pip_install_ok = True  # Assume OK unless requirements.txt install fails
+        model_files_ok = True  # Assume OK unless download fails
         try:
-            # --- 1. Pip Installation ---
-            progress_callback("--- Installing/Updating Pip Packages ---")
+            # Only install requirements.txt packages (ONNX is managed by run.bat)
+            progress_callback("--- Installing/Updating Pip Packages (excluding ONNX) ---")
             print("DEBUG: run_install_worker - Getting pip path...") # DEBUG LOG
             venv_pip = self._get_venv_pip_path()
             if not venv_pip or not venv_pip.is_file():
                 print("DEBUG: run_install_worker - Pip path check FAILED.") # DEBUG LOG
                 raise RuntimeError("Pip not found in venv. Cannot install packages.")
             print(f"DEBUG: run_install_worker - Pip path OK: {venv_pip}") # DEBUG LOG
-
-            # Determine ONNX package
-            onnx_package = "onnxruntime-gpu[cuda]" if gpu_detected else "onnxruntime"
-            progress_callback(f"Target ONNX package: {onnx_package}")
 
             # Read base requirements from requirements.txt
             packages_to_install = []
@@ -670,63 +672,39 @@ class RequirementsDialog(QDialog):
                 with open(REQ_FILE, 'r') as f:
                     for line in f:
                         line = line.strip()
-                        # Strip inline comments before further processing
                         line = line.split('#', 1)[0].strip()
-                        if line: # Check if line is not empty after stripping comment
-                            # Exclude onnxruntime placeholder if present
+                        if line:
                             match = re.match(r"^\s*([a-zA-Z0-9_\-]+)", line)
                             if match and "onnxruntime" not in match.group(1).lower():
                                 packages_to_install.append(line)
                             elif not match:
-                                 progress_callback(f"Warning: Could not parse requirement line for install: {line}")
-
-            # Add the specific ONNX package
-            packages_to_install.append(onnx_package)
+                                progress_callback(f"Warning: Could not parse requirement line for install: {line}")
             print(f"DEBUG: run_install_worker - Packages to install: {packages_to_install}") # DEBUG LOG
 
-            progress_callback(f"Attempting to install/update: {', '.join(packages_to_install)}")
-
-            # Construct pip install command
-            # Using --no-cache-dir might help avoid issues with corrupted caches
-            # Removed --upgrade to strictly adhere to requirements.txt versions
-            cmd = [str(venv_pip), "install", "--no-cache-dir"] + packages_to_install
-
-            progress_callback(f"Running: {' '.join(cmd)}") # Correctly indented
-            print("DEBUG: run_install_worker - Starting pip install subprocess...") # DEBUG LOG
-
-            # Execute pip install, stream output
-            # Use Popen for better streaming control
-            process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                       text=True, encoding='utf-8', errors='replace',
-                                       cwd=config.BASE_DIR, bufsize=1) # bufsize=1 for line buffering
-
-            # Stream stdout
-            if process.stdout:
-                for line in iter(process.stdout.readline, ''):
-                    progress_callback(line.strip())
-            # Stream stderr
-            stderr_output = ""
-            if process.stderr:
-                 for line in iter(process.stderr.readline, ''):
-                      progress_callback(f"PIP ERR: {line.strip()}")
-                      stderr_output += line
-
-            process.wait() # Wait for the process to complete # Correctly indented
-            print(f"DEBUG: run_install_worker - pip install subprocess finished with code: {process.returncode}") # DEBUG LOG
-
-            if process.returncode == 0:
-                 progress_callback("--- Pip Installation Completed Successfully ---")
-                 print("DEBUG: run_install_worker - Pip install successful.") # DEBUG LOG
-                 pip_install_ok = True
+            if packages_to_install:
+                progress_callback(f"Attempting to install/update: {', '.join(packages_to_install)}")
+                cmd = [str(venv_pip), "install", "--no-cache-dir"] + packages_to_install
+                progress_callback(f"Running: {' '.join(cmd)}")
+                print("DEBUG: run_install_worker - Starting pip install subprocess...")
+                process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                           text=True, encoding='utf-8', errors='replace',
+                                           cwd=config.BASE_DIR, bufsize=1)
+                if process.stdout:
+                    for line in iter(process.stdout.readline, ''):
+                        progress_callback(line.strip())
+                if process.stderr:
+                    for line in iter(process.stderr.readline, ''):
+                        progress_callback(f"PIP ERR: {line.strip()}")
+                process.wait()
+                print(f"DEBUG: run_install_worker - pip install subprocess finished with code: {process.returncode}")
+                if process.returncode != 0:
+                    progress_callback(f"--- Pip Installation Failed (Exit Code: {process.returncode}) ---")
+                    print("DEBUG: run_install_worker - Pip install failed.")
+                    pip_install_ok = False
             else:
-                progress_callback(f"--- Pip Installation Failed (Exit Code: {process.returncode}) ---")
-                print("DEBUG: run_install_worker - Pip install failed.") # DEBUG LOG
-                pip_install_ok = False
+                progress_callback("No requirements to install from requirements.txt.")
 
             # --- 2. Model File Download (if pip install was OK) ---
-            # Note: We check file existence *after* pip install, as pip might have installed
-            # a version that requires different model files (unlikely, but possible).
-            # The check worker's results are not directly used here for file status.
             if pip_install_ok:
                 progress_callback("--- Checking/Downloading Model Files ---")
                 # Use the module-level config, but check if it's loaded.
@@ -992,15 +970,26 @@ class RequirementsDialog(QDialog):
         if not venv_pip:
             progress_callback("ERROR: Cannot list packages, pip not found in venv.")
             return None
+        # Use --format=json for reliable parsing
+        # Use --disable-pip-version-check to avoid extra stderr noise
+        cmd = [str(venv_pip), "list", "--format=json", "--disable-pip-version-check"]
+        # --- Diagnostic Logging ---
+        import pprint
+        env_snapshot = {k: v for k, v in os.environ.items()}
+        progress_callback("=== ENVIRONMENT SNAPSHOT BEFORE PIP LIST ===")
+        progress_callback(pprint.pformat(env_snapshot)[:2000] + "..." if len(pprint.pformat(env_snapshot)) > 2000 else pprint.pformat(env_snapshot))
+        progress_callback(f"Working directory (cwd): {config.BASE_DIR}")
+        progress_callback(f"Full pip command: {' '.join(cmd)}")
+        # Optionally, log where pip is found in the environment
+        import shutil
+        pip_path = shutil.which("pip")
+        progress_callback(f"shutil.which('pip') in this environment: {pip_path}")
+        # --- End Diagnostic Logging ---
+        progress_callback(f"Running: {' '.join(cmd)}")
+        # Increased timeout as pip list can sometimes be slow
         try:
-            # Use --format=json for reliable parsing
-            # Use --disable-pip-version-check to avoid extra stderr noise
-            cmd = [str(venv_pip), "list", "--format=json", "--disable-pip-version-check"]
-            progress_callback(f"Running: {' '.join(cmd)}")
-            # Increased timeout as pip list can sometimes be slow
             process = subprocess.run(cmd, capture_output=True, text=True, check=True,
                                      cwd=config.BASE_DIR, timeout=60)
-
             # Check for potential warnings in stderr even if return code is 0
             if process.stderr:
                  progress_callback(f"Pip list stderr (warnings):\n{process.stderr.strip()}")
@@ -1015,7 +1004,30 @@ class RequirementsDialog(QDialog):
         except subprocess.CalledProcessError as e:
             progress_callback(f"ERROR running pip list (Code: {e.returncode}): {e}")
             progress_callback(f"Stderr: {e.stderr}")
-            return None
+            progress_callback("Attempting fallback: python.exe -m pip list ...")
+            # Fallback: try using python.exe -m pip list
+            venv_python = self._get_venv_python_path()
+            if venv_python:
+                fallback_cmd = [str(venv_python), "-m", "pip", "list", "--format=json", "--disable-pip-version-check"]
+                progress_callback(f"Fallback command: {' '.join(fallback_cmd)}")
+                try:
+                    fallback_proc = subprocess.run(fallback_cmd, capture_output=True, text=True, check=True,
+                                                  cwd=config.BASE_DIR, timeout=60)
+                    if fallback_proc.stderr:
+                        progress_callback(f"Fallback pip list stderr (warnings):\n{fallback_proc.stderr.strip()}")
+                    raw_fallback_output = fallback_proc.stdout
+                    progress_callback(f"DEBUG: Fallback raw pip list JSON output:\n{raw_fallback_output[:1000]}...") # Log raw output
+                    installed = json.loads(raw_fallback_output)
+                    packages_dict = {pkg['name'].lower(): pkg['version'] for pkg in installed}
+                    progress_callback(f"Found {len(packages_dict)} packages in venv (fallback).")
+                    return packages_dict
+                except Exception as fallback_e:
+                    progress_callback(f"Fallback python.exe -m pip list failed: {fallback_e}")
+                    progress_callback(f"Fallback stderr: {getattr(fallback_e, 'stderr', '')}")
+                    return None
+            else:
+                progress_callback("No venv python found for fallback.")
+                return None
         except subprocess.TimeoutExpired:
              progress_callback("ERROR: pip list command timed out.")
              return None

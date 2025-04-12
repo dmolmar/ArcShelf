@@ -14,6 +14,16 @@ import config
 
 def main():
     """Main function to set up and run the application."""
+    # --- Enforce launch via run.bat ---
+    import os
+    if os.environ.get("ARCSHELF_LAUNCHED_VIA_BAT") != "1":
+        from PyQt6.QtWidgets import QMessageBox
+        QMessageBox.critical(None, "Launch Error",
+            "ArcShelf must be started using 'run.bat'.\n\n"
+            "Please close this window and use the provided batch script to launch the application.\n"
+            "This ensures all requirements and environment settings are correct."
+        )
+        sys.exit(1)
     # Set AppUserModelID for Windows taskbar grouping and icon
     # See: https://docs.microsoft.com/en-us/windows/win32/shell/appids
     if sys.platform == "win32":
