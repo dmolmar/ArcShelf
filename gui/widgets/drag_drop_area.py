@@ -666,6 +666,7 @@ class DragDropArea(QGraphicsView):
             # --- File Actions ---
             # Use the dropped image path if available, otherwise fallback to gallery selection
             current_image_path = self.dropped_image_path or self.image_gallery.last_selected_image_path
+            print(f"[DEBUG] DragDropArea.contextMenuEvent: current_image_path = '{current_image_path}'") # ADDED LOG
             if current_image_path and Path(current_image_path).exists(): # Check path validity
                  context_menu.addSeparator()
                  open_in_viewer_action = context_menu.addAction("Open in default viewer")
@@ -678,8 +679,8 @@ class DragDropArea(QGraphicsView):
                  open_in_viewer_action.triggered.connect(lambda: self._open_in_viewer(current_image_path))
                  open_in_browser_action.triggered.connect(lambda: self._open_in_file_browser(current_image_path))
                  copy_name_action.triggered.connect(lambda: self._copy_image_name(current_image_path))
-                 copy_image_action.triggered.connect(lambda p=current_image_path: self.image_gallery._copy_image_to_clipboard(p)) # ADDED
-                 copy_tags_action.triggered.connect(lambda p=current_image_path: self.image_gallery._copy_tags_to_clipboard(p)) # ADDED
+                 copy_image_action.triggered.connect(lambda checked=False, path=current_image_path: self.image_gallery._copy_image_to_clipboard(path)) # MODIFIED
+                 copy_tags_action.triggered.connect(lambda checked=False, path=current_image_path: self.image_gallery._copy_tags_to_clipboard(path)) # MODIFIED
                  export_jpg_action.triggered.connect(lambda: self._export_as_jpg(current_image_path))
 
             # Execute the menu at the global cursor position

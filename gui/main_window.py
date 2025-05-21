@@ -2099,6 +2099,7 @@ class ImageGallery(QMainWindow):
 
     def _copy_tags_to_clipboard(self, image_path: str):
         """Fetches tags for an image and copies them as comma-separated text."""
+        print(f"[DEBUG] ImageGallery._copy_tags_to_clipboard: received image_path = '{image_path}'") # ADDED LOG
         if not image_path:
             print("Error copying tags: Invalid path.")
             self.updateInfoTextSignal.emit("Error: Could not copy tags (invalid path).\n")
@@ -2110,20 +2111,32 @@ class ImageGallery(QMainWindow):
                 self.updateInfoTextSignal.emit("Error: Could not access clipboard.\n")
                 return
 
-            # Fetch tags from DB
-            rating, tags = self.db.get_image_info_by_path(image_path)
-            if tags is None: # Check if tags list is None (error or not found)
-                print(f"Error copying tags: Could not retrieve tags for {image_path} from DB.")
+            tags_to_copy: Optional[List[TagPrediction]] = None
+
+            # Check if the image path matches the currently dropped image and if temporary predictions exist
+            if (self.drag_drop_area.dropped_image_path and
+                normalize_path(self.drag_drop_area.dropped_image_path) == normalize_path(image_path) and
+                self.drag_drop_area.temporary_predictions is not None):
+                print(f"ImageGallery._copy_tags_to_clipboard: Using temporary predictions for dropped image: {image_path}")
+                tags_to_copy = self.drag_drop_area.temporary_predictions
+            else:
+                # Otherwise, fetch tags from DB
+                print(f"ImageGallery._copy_tags_to_clipboard: Fetching tags from DB for: {image_path}")
+                rating, db_tags = self.db.get_image_info_by_path(image_path)
+                tags_to_copy = db_tags # db_tags can be None
+
+            if tags_to_copy is None: # Check if tags list is None (error or not found)
+                print(f"Error copying tags: Could not retrieve tags for {image_path}.")
                 self.updateInfoTextSignal.emit(f"Error: Could not retrieve tags for '{os.path.basename(image_path)}'.\n")
                 return
-            if not tags: # Check if tags list is empty
+            if not tags_to_copy: # Check if tags list is empty
                 print(f"No tags found for {image_path} to copy.")
                 self.updateInfoTextSignal.emit(f"No tags found for '{os.path.basename(image_path)}' to copy.\n")
                 clipboard.setText("") # Clear clipboard or set empty string
                 return
 
             # Format tags (excluding rating category for simplicity, or include if desired)
-            tag_names = sorted([t.tag for t in tags if t.category.lower() != 'rating'])
+            tag_names = sorted([t.tag for t in tags_to_copy if t.category.lower() != 'rating'])
             tags_string = ", ".join(tag_names)
 
             clipboard.setText(tags_string)
