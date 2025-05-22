@@ -234,16 +234,26 @@ class RequirementsDialog(QDialog):
         onnx_status_text = "ONNX Runtime: "
         onnx_style = na_style
         if results.get('pip_ok'): # Only show ONNX status if pip check was possible
-            onnx_target = "GPU" if results.get('gpu_detected') else "CPU"
-            if results.get('onnx_ok') is True:
-                onnx_status_text += f"{onnx_target} OK"
-                onnx_style = ok_style
-            elif results.get('onnx_ok') is False:
-                onnx_status_text += f"{onnx_target} FAIL"
-                onnx_style = fail_style
-            else: # Should not happen if pip_ok, but handle anyway
-                onnx_status_text += "?"
-                onnx_style = na_style
+            if results.get('gpu_detected') is True:
+                if results.get('onnx_ok') is True:
+                    onnx_status_text += "GPU OK"
+                    onnx_style = ok_style
+                elif results.get('onnx_ok') is False:
+                    onnx_status_text += "GPU FAIL (Package Issue)"
+                    onnx_style = fail_style
+                else:
+                    onnx_status_text += "GPU ?"
+                    onnx_style = na_style
+            else: # No GPU detected
+                if results.get('onnx_ok') is True:
+                    onnx_status_text += "CPU OK"
+                    onnx_style = ok_style
+                elif results.get('onnx_ok') is False:
+                    onnx_status_text += "CPU FAIL (Package Issue)"
+                    onnx_style = fail_style
+                else:
+                    onnx_status_text += "CPU ?"
+                    onnx_style = na_style
         else:
              onnx_status_text += "N/A"
 
@@ -394,7 +404,7 @@ class RequirementsDialog(QDialog):
             "python_ok": None,
             "venv_ok": None,
             "pip_ok": None,
-            "gpu_detected": None,
+            "gpu_detected": None, # Re-add gpu_detected to results
             "onnx_package_needed": None,
             "packages_ok": None,
             "onnx_ok": None, # Status of the onnxruntime *package*
@@ -484,17 +494,14 @@ class RequirementsDialog(QDialog):
              results["gpu_detected"] = False
              progress_callback(f"-> GPU Check Error: {e}")
         print("DEBUG: run_checks_worker - GPU check finished.") # DEBUG LOG
+
         # --- 5. Package Check ---
         progress_callback("--- Checking Installed Packages ---")
         print("DEBUG: run_checks_worker - Checking packages...") # DEBUG LOG
         try:
-            # Determine required ONNX package
-            if results["gpu_detected"]:
-                results["onnx_package_needed"] = "onnxruntime-gpu[cuda]"
-                progress_callback(f"-> Target ONNX Runtime: GPU (checking for {results['onnx_package_needed']})")
-            else:
-                results["onnx_package_needed"] = "onnxruntime"
-                progress_callback(f"-> Target ONNX Runtime: CPU (checking for {results['onnx_package_needed']})")
+            # Always target onnxruntime-gpu
+            results["onnx_package_needed"] = "onnxruntime-gpu"
+            progress_callback(f"-> Target ONNX Runtime: GPU (checking for {results['onnx_package_needed']})")
 
             # Read base requirements from requirements.txt
             base_requirements: Dict[str, str] = {} # { 'package_name_lower': 'Full Specifier Line' }
@@ -545,8 +552,8 @@ class RequirementsDialog(QDialog):
                      # TODO: Add version comparison using packaging library if needed
                      progress_callback(f"   Found: {req_name} (Version: {installed_packages[req_name]})")
 
-            # Check specific ONNX requirement
-            onnx_req_base_lower = "onnxruntime-gpu" if results["gpu_detected"] else "onnxruntime"
+            # Check specific ONNX requirement (always onnxruntime-gpu)
+            onnx_req_base_lower = "onnxruntime-gpu"
             min_onnx_version = "1.15.1"
             if onnx_req_base_lower in installed_packages:
                 installed_ver = installed_packages[onnx_req_base_lower]
@@ -560,8 +567,8 @@ class RequirementsDialog(QDialog):
                     progress_callback(f"   FOUND BUT WRONG VERSION: {onnx_req_base_lower} (Version: {installed_ver}) - Requires exactly {min_onnx_version}")
             else:
                 all_reqs_found = False # If ONNX is missing, overall packages are not OK
-                missing_list.append(results["onnx_package_needed"]) # Add the specific needed one
-                progress_callback(f"   MISSING: {results['onnx_package_needed']}")
+                missing_list.append(f"{onnx_req_base_lower}=={min_onnx_version}") # Add the specific needed one
+                progress_callback(f"   MISSING: {onnx_req_base_lower}=={min_onnx_version}")
 
             results["packages_ok"] = all_reqs_found and onnx_found_correctly # Both base and correct ONNX needed
             results["onnx_ok"] = onnx_found_correctly
@@ -618,7 +625,7 @@ class RequirementsDialog(QDialog):
         progress_callback(f"Python OK: {results['python_ok']}")
         progress_callback(f"Venv OK: {results['venv_ok']}")
         progress_callback(f"Pip OK: {results['pip_ok']}")
-        progress_callback(f"GPU Detected: {results['gpu_detected']}")
+        progress_callback(f"GPU Detected: {results['gpu_detected']}") # Add GPU detected status
         progress_callback(f"Packages OK: {results['packages_ok']}")
         progress_callback(f"ONNX Runtime OK: {results['onnx_ok']}")
         progress_callback(f"Model File OK: {results['model_file_ok']}") # Add model file status
@@ -675,9 +682,9 @@ class RequirementsDialog(QDialog):
                         line = line.split('#', 1)[0].strip()
                         if line:
                             match = re.match(r"^\s*([a-zA-Z0-9_\-]+)", line)
-                            if match and "onnxruntime" not in match.group(1).lower():
+                            if match: # No longer excluding onnxruntime, as it's now in requirements.txt
                                 packages_to_install.append(line)
-                            elif not match:
+                            else:
                                 progress_callback(f"Warning: Could not parse requirement line for install: {line}")
             print(f"DEBUG: run_install_worker - Packages to install: {packages_to_install}") # DEBUG LOG
 
