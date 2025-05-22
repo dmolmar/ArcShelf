@@ -699,9 +699,9 @@ class ImageGallery(QMainWindow):
         if image_id in self.thumbnail_loaders:
             label = self.thumbnail_loaders[image_id] # Get the label object
             if label: # Check if label still exists (it might have been scrolled away)
-                # Scale pixmap to fit the label's fixed size
-                scaled_pixmap = pixmap.scaled(label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-                label.setPixmap(scaled_pixmap)
+                # The pixmap received from ThumbnailLoader is already scaled and DPI-aware.
+                # Set it directly without further scaling.
+                label.setPixmap(pixmap)
             # Remove the entry regardless of whether the label still exists
             del self.thumbnail_loaders[image_id]
         else:

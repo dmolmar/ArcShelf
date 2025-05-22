@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from PyQt6.QtCore import QObject, QRunnable, Qt, pyqtSignal, pyqtSlot
 from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtWidgets import QApplication # Import QApplication for devicePixelRatio
 from PIL import UnidentifiedImageError
 # from PIL import Image # Removed unused PIL import
 
@@ -120,14 +121,30 @@ class ThumbnailLoader(QRunnable):
 
             # 3. If QImage is available (from cache or generated), create and scale Pixmap
             if qimage and not qimage.isNull():
+                # Get the current device pixel ratio from the QApplication instance
+                # This is crucial for high-DPI displays
+                app = QApplication.instance()
+                if app:
+                    device_pixel_ratio = app.devicePixelRatio()
+                    if device_pixel_ratio > 1:
+                        qimage.setDevicePixelRatio(device_pixel_ratio)
+                
+                # Calculate physical target dimensions based on device pixel ratio
+                physical_target_width = int(self.target_width * device_pixel_ratio)
+                physical_target_height = int(self.target_height * device_pixel_ratio)
+
                 pixmap = QPixmap.fromImage(qimage)
-                # Scale the pixmap smoothly to fit the target dimensions while keeping aspect ratio
+                # Scale the pixmap smoothly to fit the PHYSICAL target dimensions
                 scaled_pixmap = pixmap.scaled(
-                    self.target_width,
-                    self.target_height,
+                    physical_target_width,
+                    physical_target_height,
                     Qt.AspectRatioMode.KeepAspectRatio, # Keep aspect ratio
                     Qt.TransformationMode.SmoothTransformation # Use smooth scaling
                 )
+                # Set the devicePixelRatio on the *scaled* pixmap as well.
+                # This ensures the QLabel correctly interprets its logical size.
+                scaled_pixmap.setDevicePixelRatio(device_pixel_ratio)
+                
                 # Emit the final scaled pixmap
                 self.signals.thumbnailLoaded.emit(self.image_id, scaled_pixmap)
             else:

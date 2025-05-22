@@ -160,6 +160,8 @@ goto ContinueAfterTagsDownload
 REM --- Launch Application ---
 echo Starting ArcShelf... | powershell -Command "Tee-Object -FilePath setup.log -Append"
 set ARCSHELF_LAUNCHED_VIA_BAT=1
+REM Enable High-DPI scaling for Qt applications
+set QT_ENABLE_HIGHDPI_SCALING=1
 "%VENV_DIR%\Scripts\python.exe" main.py
 echo ArcShelf finished. | powershell -Command "Tee-Object -FilePath setup.log -Append"
 
