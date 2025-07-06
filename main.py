@@ -2,6 +2,7 @@ import sys
 import ctypes
 import traceback
 from pathlib import Path
+from image_processing.tagger import ImageTaggerModel
 
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtGui import QIcon, QImageReader
