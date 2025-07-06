@@ -554,7 +554,7 @@ class RequirementsDialog(QDialog):
 
             # Check specific ONNX requirement (always onnxruntime-gpu)
             onnx_req_base_lower = "onnxruntime-gpu"
-            min_onnx_version = "1.15.1"
+            min_onnx_version = "1.22.0"
             if onnx_req_base_lower in installed_packages:
                 installed_ver = installed_packages[onnx_req_base_lower]
                 if installed_ver == min_onnx_version:

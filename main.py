@@ -3,63 +3,48 @@ import ctypes
 import traceback
 from pathlib import Path
 
-# Imports - Assuming run.bat has installed requirements, these should succeed.
-# If they fail here, it indicates a deeper issue (e.g., corrupted install).
-from PyQt6.QtWidgets import QApplication, QMessageBox # Keep QMessageBox for error popups
+from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6.QtGui import QIcon, QImageReader
 from gui.main_window import ImageGallery
-from gui.dialogs.requirements_dialog import RequirementsDialog # Keep dialog import
+from gui.dialogs.requirements_dialog import RequirementsDialog
 import config
-# Removed check_critical_requirements import, no longer used at startup
 
 def main():
     """Main function to set up and run the application."""
     # --- Enforce launch via run.bat ---
     import os
     if os.environ.get("ARCSHELF_LAUNCHED_VIA_BAT") != "1":
-        from PyQt6.QtWidgets import QMessageBox
         QMessageBox.critical(None, "Launch Error",
             "ArcShelf must be started using 'run.bat'.\n\n"
             "Please close this window and use the provided batch script to launch the application.\n"
             "This ensures all requirements and environment settings are correct."
         )
         sys.exit(1)
+
     # Set AppUserModelID for Windows taskbar grouping and icon
-    # See: https://docs.microsoft.com/en-us/windows/win32/shell/appids
     if sys.platform == "win32":
-        myappid = 'com.dmolmar.arcshelf.1' # Unique ID for the app
+        myappid = 'com.dmolmar.arcshelf.1'
         try:
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
         except AttributeError:
             print("Warning: Could not set AppUserModelID. Taskbar icon might not group correctly.")
 
-    app = QApplication(sys.argv)
+    # Reutiliza la instancia de QApplication si ya existe, si no, crea una nueva.
+    app = QApplication.instance() or QApplication(sys.argv)
 
-    # Set application icon (optional, but good practice)
+    # Set application icon
     if config.ICON_PATH.is_file():
         app.setWindowIcon(QIcon(str(config.ICON_PATH)))
     else:
         print(f"Warning: Application icon not found at {config.ICON_PATH}")
 
-    # Remove Qt's image allocation limit if dealing with many large images
+    # Remove Qt's image allocation limit
     QImageReader.setAllocationLimit(0)
 
     # --- Create and Show Main Window ---
-    # No pre-check here anymore. If ImageGallery import failed earlier,
-    # this might raise NameError, but PyQt6 check ensures QApplication runs.
-    # If ImageGallery *did* import but its *internal* imports fail (like onnx),
-    # the window should still appear, and checks inside will handle it.
     try:
         gallery = ImageGallery()
-        gallery.show() # showMaximized() is called within ImageGallery.__init__
-    except NameError:
-        # This happens if 'ImageGallery' failed to import earlier due to missing deps
-        QMessageBox.critical(None, "Initialization Error",
-                             "Failed to initialize the main window.\n"
-                             "This might be due to missing dependencies like 'onnxruntime' or 'pandas'.\n"
-                             "Please use the 'Check Requirements' button (if available) or run 'run.bat'.")
-        # Don't start event loop if main window failed
-        sys.exit(1)
+        gallery.show()
     except Exception as e:
         # Catch other unexpected errors during gallery initialization
         QMessageBox.critical(None, "Initialization Error",
@@ -70,7 +55,7 @@ def main():
         sys.exit(1)
 
 
-    # Start the application event loop (only if gallery was successfully shown)
+    # Start the application event loop
     sys.exit(app.exec())
 
 if __name__ == "__main__":

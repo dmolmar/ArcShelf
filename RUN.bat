@@ -4,7 +4,7 @@ setlocal
 REM --- Configuration ---
 set VENV_DIR=.venv
 set REQ_FILE=requirements.txt
-set PYTHON_CMD=python
+set PYTHON_CMD=py -3.10
 
 REM --- Check for Python in PATH ---
 echo Checking for Python installation...

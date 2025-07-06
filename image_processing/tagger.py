@@ -2,10 +2,11 @@ from pathlib import Path
 from typing import List, Optional
 from collections import defaultdict
 from PIL import Image
+
+from image_processing.predictor import WaifuTagger
+
 from PyQt6.QtCore import pyqtSignal, QObject
 
-# Absolute imports
-from image_processing.predictor import WaifuTagger
 from database.models import TagPrediction
 import config
 import traceback
