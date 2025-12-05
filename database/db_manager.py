@@ -497,8 +497,8 @@ class Database:
                      # --- MODIFICATION: Handle search_term condition ---
                     search_condition = ""
                     if search_term:
-                        search_condition = "AND t.name LIKE ? COLLATE NOCASE" # Prefix search
-                        final_params.append(f'{search_term}%') # Append % for prefix match
+                        search_condition = "AND t.name LIKE ? COLLATE NOCASE" # Substring search
+                        final_params.append(f'%{search_term}%') # Append % for substring match
                     # If search_term is empty, no t.name condition is added, showing all tags
                     # --- END MODIFICATION ---
 

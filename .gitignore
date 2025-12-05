@@ -8,3 +8,4 @@ __pycache__/
 *.pyc
 .rooignore
 .venv
+data.7z

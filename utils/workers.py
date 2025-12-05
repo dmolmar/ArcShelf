@@ -85,7 +85,7 @@ class ThumbnailLoader(QRunnable):
     Worker thread specifically for loading and scaling thumbnails.
     Uses ThumbnailCache for efficient loading.
     """
-    def __init__(self, image_id: str, image_path: str, target_width: int, target_height: int, thumbnail_cache: 'ThumbnailCache'):
+    def __init__(self, image_id: str, image_path: str, target_width: int, target_height: int, thumbnail_cache: 'ThumbnailCache', page_token: object = None):
         """
         Initializes the thumbnail loader.
 
@@ -95,6 +95,7 @@ class ThumbnailLoader(QRunnable):
             target_width: The target width for the displayed thumbnail.
             target_height: The target height for the displayed thumbnail.
             thumbnail_cache: The ThumbnailCache instance.
+            page_token: A token to identify which page this loader belongs to (for cancellation).
         """
         super().__init__()
         self.image_id = image_id
@@ -102,25 +103,47 @@ class ThumbnailLoader(QRunnable):
         self.target_width = target_width
         self.target_height = target_height
         self.thumbnail_cache = thumbnail_cache
+        self.page_token = page_token
         self.signals = ThumbnailLoaderSignals()
+        self._cancelled = False
+
+    def cancel(self):
+        """Mark this loader as cancelled."""
+        self._cancelled = True
 
     @pyqtSlot()
     def run(self):
         """Load thumbnail from cache or generate, then emit."""
         try:
+            # Check if cancelled before doing any work
+            if self._cancelled:
+                return
             # 1. Try getting QImage from cache
             qimage: Optional[QImage] = self.thumbnail_cache.get_thumbnail(self.image_id)
+
+            # Check if cancelled after cache lookup
+            if self._cancelled:
+                return
 
             # 2. If not in cache, try generating it (update_thumbnail handles saving)
             if qimage is None:
                 print(f"Thumbnail cache miss for {self.image_id}, generating...")
+                # Check if cancelled before expensive generation
+                if self._cancelled:
+                    return
                 # update_thumbnail handles opening, resizing, saving to disk cache
                 self.thumbnail_cache.update_thumbnail(self.image_path, self.image_id)
+                # Check if cancelled after generation
+                if self._cancelled:
+                    return
                 # After update, try getting it again (it should be in memory cache now)
                 qimage = self.thumbnail_cache.get_thumbnail(self.image_id)
 
             # 3. If QImage is available (from cache or generated), create and scale Pixmap
             if qimage and not qimage.isNull():
+                # Check if cancelled before pixmap creation
+                if self._cancelled:
+                    return
                 # Get the current device pixel ratio from the QApplication instance
                 # This is crucial for high-DPI displays
                 app = QApplication.instance()
@@ -144,6 +167,10 @@ class ThumbnailLoader(QRunnable):
                 # Set the devicePixelRatio on the *scaled* pixmap as well.
                 # This ensures the QLabel correctly interprets its logical size.
                 scaled_pixmap.setDevicePixelRatio(device_pixel_ratio)
+                
+                # Final cancellation check before emitting
+                if self._cancelled:
+                    return
                 
                 # Emit the final scaled pixmap
                 self.signals.thumbnailLoaded.emit(self.image_id, scaled_pixmap)

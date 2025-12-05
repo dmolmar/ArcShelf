@@ -39,7 +39,7 @@ from image_processing.thumbnail import ThumbnailCache
 from image_processing.tagger import ImageTaggerModel
 from search.query_parser import SearchQueryParser, ASTNode # Import base ASTNode
 from search.query_evaluator import SearchQueryEvaluator
-from utils.workers import Worker, ThumbnailLoader # Assuming ThumbnailLoaderSignals is not needed directly here
+from utils.workers import Worker, ThumbnailLoader # Import ThumbnailLoader for type hints
 from gui.widgets.image_label import ImageLabel
 from gui.widgets.drag_drop_area import DragDropArea
 from gui.widgets.advanced_search import AdvancedSearchPanel # Import the actual panel
@@ -112,7 +112,9 @@ class ImageGallery(QMainWindow):
         self.total_pages: int = 1
         self.page_size: int = 50
         self.target_height: int = 250 # Default row height
-        self.thumbnail_loaders: Dict[int, Tuple[ImageLabel, str]] = {}
+        self.thumbnail_loaders: Dict[str, ImageLabel] = {}
+        self.current_page_token: object = None  # Token to identify current page loaders
+        self.active_loaders: List[ThumbnailLoader] = []  # Track active loaders for cancellation
         self._temp_pred_callback: Optional[Callable] = None # For drag-drop predictions
         self._suggestions_map: Dict[str, str] = {}
         self._ignore_cursor_change_on_focus = False
@@ -138,6 +140,7 @@ class ImageGallery(QMainWindow):
         self.aspect_ratios: Dict[str, float] = {} # Cache for calculated aspect ratios
         self.image_resolutions: Dict[str, Optional[str]] = {} # Cache for resolution strings from DB
         self.image_metadata: Dict[str, Dict[str, Any]] = {} # Cache for mod_time, size from DB
+        self.image_ids_by_path: Dict[str, str] = {} # Cache for image IDs by path
 
         # Load initial active directories from DB
         self._load_initial_active_directories()
@@ -526,6 +529,15 @@ class ImageGallery(QMainWindow):
                 # Explicitly delete the layout item itself (though takeAt might suffice)
                 # del item # Not usually necessary
 
+        # Cancel all active loaders from previous page
+        if self.active_loaders:
+            for loader in self.active_loaders:
+                loader.cancel()
+            self.active_loaders.clear()
+        
+        # Generate new page token
+        self.current_page_token = object()
+        
         self.thumbnail_loaders.clear()
         # Force processing events to help with immediate clearing if needed
         # QApplication.processEvents()
@@ -681,15 +693,26 @@ class ImageGallery(QMainWindow):
             label.setFixedSize(img_width, img_height)
 
             # Load thumbnail
-            image_id = self.db.get_image_id_from_path(label.image_path)
+            image_id = self.image_ids_by_path.get(label.image_path)
+            if not image_id:
+                normalized_path = normalize_path(label.image_path)
+                image_id = self.image_ids_by_path.get(normalized_path) if normalized_path else None
+            if not image_id:
+                image_id = self.db.get_image_id_from_path(label.image_path)
+                if image_id:
+                    self.image_ids_by_path[label.image_path] = image_id
+                    normalized_path = normalize_path(label.image_path)
+                    if normalized_path:
+                        self.image_ids_by_path[normalized_path] = image_id
             if image_id:
                  self.thumbnail_loaders[image_id] = label # Store reference
                  # Create and start the loader
-                 loader = ThumbnailLoader(image_id, label.image_path, img_width, img_height, self.thumbnail_cache)
+                 loader = ThumbnailLoader(image_id, label.image_path, img_width, img_height, self.thumbnail_cache, self.current_page_token)
                  loader.signals.thumbnailLoaded.connect(self.thumbnailLoaded.emit)
                  loader.signals.thumbnailError.connect(
                      lambda img_id=image_id, err_msg="": print(f"Thumb load error for {img_id}: {err_msg}")
                  )
+                 self.active_loaders.append(loader)
                  self.threadpool.start(loader)
             else:
                  # Fallback if image not in DB (should be less common now)
@@ -721,8 +744,10 @@ class ImageGallery(QMainWindow):
         else:
             # This can happen if the page is changed before a thumbnail finishes loading.
             # The result is simply discarded, so we don't need to print a warning.
-            # print(f"Warning: Image ID {image_id} not found in loaders dict after thumbnail loaded.") # Suppressed warning
             pass # Result is discarded, no action needed.
+        
+        # Remove from active loaders list if present
+        self.active_loaders = [loader for loader in self.active_loaders if loader.image_id != image_id]
         # pixmap.detach() # Maybe needed?
 
     def update_total_images_label(self):
@@ -1753,12 +1778,12 @@ class ImageGallery(QMainWindow):
                     dir_conditions.append("path LIKE ?"); params.append(f"{norm_dir}%")
                 if not dir_conditions: return []
                 where_clause = " OR ".join(dir_conditions)
-                # Fetch path, mod_time, size
-                query = f"SELECT path, modification_time, file_size FROM images WHERE {where_clause}"
+                # Fetch id, path, mod_time, size
+                query = f"SELECT id, path, modification_time, file_size, resolution FROM images WHERE {where_clause}"
                 cursor.execute(query, params)
                 # Store results temporarily, will be processed in _update_gallery_display
                 self._current_search_results_with_metadata = cursor.fetchall()
-                image_paths = [row[0] for row in self._current_search_results_with_metadata]
+                image_paths = [row[1] for row in self._current_search_results_with_metadata]
         except sqlite3.Error as e:
             print(f"DB Error getting all images: {e}")
             self._current_search_results_with_metadata = [] # Clear on error
@@ -1832,12 +1857,12 @@ class ImageGallery(QMainWindow):
         try:
             with self.db.lock, sqlite3.connect(self.db.db_path) as conn:
                 cursor = conn.cursor(); id_placeholders = ','.join('?' for _ in image_ids)
-                # Fetch path, mod_time, size
-                query = f"SELECT path, modification_time, file_size FROM images WHERE id IN ({id_placeholders})"
+                # Fetch id, path, mod_time, size
+                query = f"SELECT id, path, modification_time, file_size, resolution FROM images WHERE id IN ({id_placeholders})"
                 cursor.execute(query, list(image_ids))
                 # Store results temporarily, will be processed in _update_gallery_display
                 self._current_search_results_with_metadata = cursor.fetchall()
-                image_paths = [row[0] for row in self._current_search_results_with_metadata]
+                image_paths = [row[1] for row in self._current_search_results_with_metadata]
         except sqlite3.Error as e:
             print(f"DB Error getting paths from IDs: {e}")
             self._current_search_results_with_metadata = [] # Clear on error
@@ -1917,22 +1942,57 @@ class ImageGallery(QMainWindow):
         print(f"ImageGallery: _update_gallery_display with {len(image_paths)} images")
         self.all_images = image_paths # Store the list of paths to display
 
-        # Populate metadata cache from the results fetched during search
+        # Populate metadata, ID, and resolution caches from the results fetched during search
         self.image_metadata.clear()
+        self.image_ids_by_path.clear()
+        self.image_resolutions = {}
         if hasattr(self, '_current_search_results_with_metadata') and self._current_search_results_with_metadata:
             print(f"  Populating metadata cache from {len(self._current_search_results_with_metadata)} search results...")
-            for path, mod_time, size in self._current_search_results_with_metadata:
-                # Use normalized path as key for consistency
-                self.image_metadata[normalize_path(path)] = {'mtime': mod_time, 'size': size}
+            for row in self._current_search_results_with_metadata:
+                image_id = None
+                path = None
+                mod_time = None
+                size = None
+                resolution = None
+
+                if len(row) >= 5:
+                    image_id, path, mod_time, size, resolution = row[:5]
+                elif len(row) == 4:
+                    image_id, path, mod_time, size = row
+                elif len(row) == 3:
+                    path, mod_time, size = row
+                elif len(row) >= 2:
+                    path, mod_time = row[:2]
+                elif len(row) == 1:
+                    path = row[0]
+
+                if not path:
+                    continue
+
+                normalized_path = normalize_path(path)
+                metadata_entry = {'mtime': mod_time, 'size': size}
+                self.image_metadata[path] = metadata_entry
+                if normalized_path and normalized_path != path:
+                    self.image_metadata[normalized_path] = metadata_entry
+                if image_id:
+                    self.image_ids_by_path[path] = image_id
+                    if normalized_path:
+                        self.image_ids_by_path[normalized_path] = image_id
+                if resolution is not None:
+                    self.image_resolutions[path] = resolution
+                    if normalized_path and normalized_path != path:
+                        self.image_resolutions[normalized_path] = resolution
             # Clear the temporary storage
             self._current_search_results_with_metadata = []
         else:
-             print("  Warning: No metadata found in _current_search_results_with_metadata. Sorting by Date/Size might be slow.")
+            print("  Warning: No metadata found in _current_search_results_with_metadata. Sorting by Date/Size might be slow.")
 
-        # Fetch resolution strings for these paths from the database
-        print("  Fetching resolutions from DB...")
-        self.image_resolutions = self.db.get_resolutions_for_paths(image_paths)
-        print(f"  Fetched {len(self.image_resolutions)} resolutions.")
+        if not self.image_resolutions and image_paths:
+            print("  Fetching resolutions from DB...")
+            self.image_resolutions = self.db.get_resolutions_for_paths(image_paths)
+            print(f"  Fetched {len(self.image_resolutions)} resolutions.")
+        else:
+            print(f"  Loaded {len(self.image_resolutions)} resolution entries from cached results.")
 
         # Aspect ratios will be calculated on demand using self.image_resolutions.
         # Removed population of self.aspect_ratios cache here.
@@ -2084,6 +2144,7 @@ class ImageGallery(QMainWindow):
     # --- Clipboard Helper Methods ---
     def _copy_image_to_clipboard(self, image_path: str):
         """Loads an image and copies it to the system clipboard."""
+        print(f"[DEBUG] _copy_image_to_clipboard called with image_path: '{image_path}'")
         if not image_path or not Path(image_path).exists():
             print(f"Error copying image: Invalid path {image_path}")
             self.updateInfoTextSignal.emit("Error: Could not copy image (invalid path).\n")
@@ -2099,7 +2160,7 @@ class ImageGallery(QMainWindow):
             image = QImage(image_path)
             if image.isNull():
                 print(f"Error copying image: Failed to load image {image_path} with QImage.")
-                self.updateInfoTextSignal.emit("Error: Failed to load image for copying.\n")
+                self.updateInfoTextSignal.emit("Error: Could not access clipboard.\n")
                 return
 
             clipboard.setImage(image)

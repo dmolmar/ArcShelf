@@ -28,7 +28,7 @@ The project is organized into several directories, each responsible for a specif
 ├── README.md               # English README (project description, features, installation, usage)
 ├── README_es.md            # Spanish README
 ├── requirements.txt        # Project dependencies list
-├── run.bat                 # Windows batch script for setup and launching
+├── RUN.bat                 # Windows batch script for setup and launching (ONLY WAY TO EXECUTE THE PROGRAM!)
 ├── arcueid.ico             # Application icon
 ├── readme_preview.png      # Image used in READMEs
 ├── database/               # Database management and models
@@ -69,7 +69,7 @@ Here's a summary of the role of the significant files:
 *   **`main.py`**: The application's entry point. Initializes the PyQt application, enforces launching via `run.bat`, sets up the main window, and starts the application event loop.
 *   **`README.md` / `README_es.md`**: Provide user-facing documentation, including features, requirements, installation, and basic usage instructions in English and Spanish.
 *   **`requirements.txt`**: Lists the Python packages and their versions required for the project. Used by pip for dependency management.
-*   **`run.bat`**: A Windows batch script that automates the setup process (checking Python, creating a virtual environment, installing dependencies, downloading model files) and launches the application. It's the recommended way to start ArcShelf.
+*   **`RUN.bat`**: A Windows batch script that automates the setup process (checking Python, creating a virtual environment, installing dependencies, downloading model files) and launches the application. It's the recommended way to start ArcShelf.
 *   **`database/db_manager.py`**: Manages all interactions with the SQLite database. It handles schema creation, adding/updating/deleting image and tag data, cleaning up orphaned records, and retrieving data for various parts of the application. Uses threading locks for safe concurrent access.
 *   **`database/models.py`**: Defines simple data structures (dataclasses) used to represent data, such as `TagPrediction`.
 *   **`gui/main_window.py`**: Defines the main `QMainWindow` for the application. It orchestrates the UI layout, connects signals and slots between different widgets and backend components, manages the image gallery display (loading thumbnails, pagination, sorting), handles user interactions like image clicks and search requests, and manages background worker tasks.
