@@ -475,6 +475,20 @@ class ImageGallery(QMainWindow):
         dialog.updateStatusText.connect(self.updateInfoTextSignal.emit)
         dialog.exec()
 
+    def open_manage_tags_dialog(self, image_path: str):
+        """Opens the dialog to manage tags for a specific image."""
+        if not image_path or not Path(image_path).exists():
+             return
+
+        from .dialogs.manage_tags import ManageTagsDialog
+        dialog = ManageTagsDialog(self, image_path, self.db)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            # Refresh info panel after closing
+            self.display_image_info_from_db(image_path)
+        else:
+             # Refresh anyway in case changes were made but not "Saved" (dialog applies immediately)
+             self.display_image_info_from_db(image_path)
+
     def open_requirements_dialog(self):
         """Opens the dialog for checking and managing requirements."""
         # Import locally as per existing pattern
