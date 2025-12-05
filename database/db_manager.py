@@ -60,6 +60,7 @@ class Database:
                         image_id TEXT NOT NULL, -- Added NOT NULL constraint
                         tag_id INTEGER NOT NULL, -- Added NOT NULL constraint
                         confidence REAL,
+                        is_manual INTEGER DEFAULT 0, -- Added boolean flag (0 or 1)
                         FOREIGN KEY (image_id) REFERENCES images(id) ON DELETE CASCADE, -- Cascade deletes
                         FOREIGN KEY (tag_id) REFERENCES tags(id) ON DELETE CASCADE, -- Cascade deletes
                         PRIMARY KEY (image_id, tag_id)
@@ -71,7 +72,18 @@ class Database:
                     cursor.execute("CREATE INDEX IF NOT EXISTS idx_image_tags_image_id ON image_tags(image_id)")
                     cursor.execute("CREATE INDEX IF NOT EXISTS idx_image_tags_tag_id ON image_tags(tag_id)")
                     cursor.execute("CREATE INDEX IF NOT EXISTS idx_images_modification_time ON images(modification_time)")
-                    # Consider adding indexes for rating, file_size, resolution if frequently searched/sorted
+
+                    # --- Schema Migration: Check for is_manual column in image_tags ---
+                    # Only needed if upgrading from an older DB version
+                    try:
+                        cursor.execute("SELECT is_manual FROM image_tags LIMIT 1")
+                    except sqlite3.OperationalError:
+                        print("Migrating database: Adding is_manual column to image_tags table...")
+                        try:
+                            cursor.execute("ALTER TABLE image_tags ADD COLUMN is_manual INTEGER DEFAULT 0")
+                        except sqlite3.Error as e:
+                            print(f"Error adding is_manual column: {e}")
+
                     conn.commit()
             # print("Database schema initialized/verified.") # Removed debug print
         except sqlite3.Error as e:
@@ -169,8 +181,12 @@ class Database:
                         if existing_rating != determined_rating: # Check against stored or initial None
                              cursor.execute("UPDATE images SET rating = ? WHERE id = ?", (determined_rating, image_id))
 
-                        # Delete old tags before adding new ones
-                        cursor.execute("DELETE FROM image_tags WHERE image_id = ?", (image_id,))
+                        # Delete old AUTOMATIC tags before adding new ones. Preserve manual tags.
+                        cursor.execute("DELETE FROM image_tags WHERE image_id = ? AND is_manual = 0", (image_id,))
+
+                        # Get IDs of existing manual tags to avoid duplicates/overwrites
+                        cursor.execute("SELECT tag_id FROM image_tags WHERE image_id = ? AND is_manual = 1", (image_id,))
+                        existing_manual_tag_ids = {row[0] for row in cursor.fetchall()}
 
                         # Filter predictions... (rest of tagging logic remains the same)
                         filtered_predictions = [pred for pred in predictions if pred.category.lower() != "rating" or pred.tag.lower() == determined_rating.lower()]
@@ -203,12 +219,13 @@ class Database:
                                     print(f"Warning: Could not retrieve tag_id for '{pred.tag}' even after INSERT OR IGNORE attempt.")
                                     continue # Skip this tag prediction if we can't get an ID
 
-                            # Only append if we successfully got a tag_id
+                            # Only append if we successfully got a tag_id AND it's not already covered by a manual tag
                             if tag_id is not None:
-                                image_tags_to_insert.append((image_id, tag_id, pred.confidence))
+                                if tag_id not in existing_manual_tag_ids:
+                                    image_tags_to_insert.append((image_id, tag_id, pred.confidence, 0)) # 0 for is_manual
 
                         if image_tags_to_insert:
-                            cursor.executemany("INSERT INTO image_tags (image_id, tag_id, confidence) VALUES (?, ?, ?)", image_tags_to_insert)
+                            cursor.executemany("INSERT INTO image_tags (image_id, tag_id, confidence, is_manual) VALUES (?, ?, ?, ?)", image_tags_to_insert)
 
 
                     # Update thumbnail if needed
@@ -633,3 +650,64 @@ class Database:
         except sqlite3.Error as e:
             print(f"Database error getting image IDs in directory {directory_path}: {e}")
             return []
+
+    def add_manual_tag(self, image_path: str, tag_name: str, category: str):
+        """Adds a manual tag to an image, ensuring it exists in the tags table."""
+        image_id = self.get_image_id_from_path(image_path)
+        if not image_id:
+            print(f"Cannot add manual tag: Image not found in DB ({image_path})")
+            return
+
+        try:
+            with self.lock:
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+
+                    # Ensure tag exists
+                    cursor.execute("INSERT OR IGNORE INTO tags (name, category) VALUES (?, ?)", (tag_name, category))
+                    cursor.execute("SELECT id FROM tags WHERE name = ?", (tag_name,))
+                    tag_id_row = cursor.fetchone()
+
+                    if not tag_id_row:
+                        print(f"Error: Could not retrieve/create tag ID for '{tag_name}'")
+                        return
+
+                    tag_id = tag_id_row[0]
+
+                    # Insert or update into image_tags with is_manual=1
+                    # We use REPLACE to overwrite any existing entry (e.g., if it was auto, now it's manual)
+                    cursor.execute("""
+                        INSERT OR REPLACE INTO image_tags (image_id, tag_id, confidence, is_manual)
+                        VALUES (?, ?, ?, 1)
+                    """, (image_id, tag_id, 1.0)) # Manual tags have 100% confidence
+
+                    conn.commit()
+                    print(f"Added manual tag '{tag_name}' to image {image_id}")
+        except sqlite3.Error as e:
+            print(f"Database error adding manual tag: {e}")
+
+    def remove_tag(self, image_path: str, tag_name: str):
+        """Removes a tag (manual or auto) from an image."""
+        image_id = self.get_image_id_from_path(image_path)
+        if not image_id:
+            print(f"Cannot remove tag: Image not found in DB ({image_path})")
+            return
+
+        try:
+            with self.lock:
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+
+                    cursor.execute("SELECT id FROM tags WHERE name = ?", (tag_name,))
+                    tag_id_row = cursor.fetchone()
+                    if not tag_id_row:
+                        print(f"Cannot remove tag: Tag '{tag_name}' not found in DB.")
+                        return
+                    tag_id = tag_id_row[0]
+
+                    cursor.execute("DELETE FROM image_tags WHERE image_id = ? AND tag_id = ?", (image_id, tag_id))
+
+                    conn.commit()
+                    print(f"Removed tag '{tag_name}' from image {image_id}")
+        except sqlite3.Error as e:
+            print(f"Database error removing tag: {e}")
