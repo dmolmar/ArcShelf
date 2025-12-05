@@ -8,6 +8,10 @@ from PyQt6.QtGui import QStandardItemModel, QStandardItem
 from database.db_manager import Database
 
 class ManageTagsDialog(QDialog):
+    # Class variables to remember last tag and category across instances
+    _last_tag_name = ""
+    _last_category = "general"
+
     def __init__(self, parent: QWidget, image_path: str, db: Database):
         super().__init__(parent)
         self.setWindowTitle("Manage Tags")
@@ -27,12 +31,16 @@ class ManageTagsDialog(QDialog):
 
         self.tag_input = QLineEdit()
         self.tag_input.setPlaceholderText("Enter new tag...")
+        self.tag_input.setText(ManageTagsDialog._last_tag_name)  # Set last used tag
+        self.tag_input.textChanged.connect(self.on_tag_input_changed)  # Connect to auto-select category
         self.setup_completer() # Setup auto-completion
 
         self.category_combo = QComboBox()
         # self.category_combo.addItems(["general", "character", "artist", "copyright", "meta"]) # Loaded from DB now
         self.category_combo.setToolTip("Select category")
         self.refresh_categories() # Load categories
+        # After categories are loaded, set to last used category
+        self.set_category_to_last_used()
 
         self.manage_cats_button = QPushButton("Manage...")
         self.manage_cats_button.setFixedWidth(80)
@@ -118,6 +126,20 @@ class ManageTagsDialog(QDialog):
 
         self.refresh_completer() # Also refresh autocomplete
 
+    def on_tag_input_changed(self, text: str):
+        """Auto-select category when typing an existing tag name."""
+        tag_name = text.strip()
+        if not tag_name:
+            return
+        
+        # Check if this tag already exists in the database
+        existing_category = self.db.get_tag_category(tag_name)
+        if existing_category:
+            # Auto-select the category
+            index = self.category_combo.findText(existing_category)
+            if index >= 0:
+                self.category_combo.setCurrentIndex(index)
+
     def add_tag(self):
         tag_name = self.tag_input.text().strip()
         category = self.category_combo.currentText()
@@ -126,6 +148,9 @@ class ManageTagsDialog(QDialog):
             return
 
         self.db.add_manual_tag(self.image_path, tag_name, category)
+        # Save last used tag and category
+        ManageTagsDialog._last_tag_name = tag_name
+        ManageTagsDialog._last_category = category
         self.tag_input.clear()
         self.refresh_tags_list()
 
@@ -160,8 +185,20 @@ class ManageTagsDialog(QDialog):
             gen_index = self.category_combo.findText("general")
             if gen_index >= 0: self.category_combo.setCurrentIndex(gen_index)
 
+    def set_category_to_last_used(self):
+        """Set the category combo box to the last used category."""
+        index = self.category_combo.findText(ManageTagsDialog._last_category)
+        if index >= 0:
+            self.category_combo.setCurrentIndex(index)
+        else:
+            # Fallback to 'general' if last category doesn't exist
+            gen_index = self.category_combo.findText("general")
+            if gen_index >= 0:
+                self.category_combo.setCurrentIndex(gen_index)
+
     def open_manage_categories_dialog(self):
         from .manage_categories import ManageCategoriesDialog
         dialog = ManageCategoriesDialog(self, self.db)
         dialog.exec()
         self.refresh_categories()
+        self.set_category_to_last_used()  # Restore last used category after refresh

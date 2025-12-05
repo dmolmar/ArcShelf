@@ -758,3 +758,15 @@ class Database:
         except sqlite3.Error as e:
             print(f"Database error deleting category {name}: {e}")
             return False
+    def get_tag_category(self, tag_name: str) -> Optional[str]:
+        """Retrieves the category of a tag by its name. Returns None if tag doesn't exist."""
+        try:
+            with self.lock:
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT category FROM tags WHERE name = ?", (tag_name,))
+                    row = cursor.fetchone()
+                    return row[0] if row else None
+        except sqlite3.Error as e:
+            print(f"Database error getting tag category for {tag_name}: {e}")
+            return None
