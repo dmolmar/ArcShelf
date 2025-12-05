@@ -475,6 +475,20 @@ class ImageGallery(QMainWindow):
         dialog.updateStatusText.connect(self.updateInfoTextSignal.emit)
         dialog.exec()
 
+    def open_manage_tags_dialog(self, image_path: str):
+        """Opens the dialog to manage tags for a specific image."""
+        if not image_path or not Path(image_path).exists():
+             return
+
+        from .dialogs.manage_tags import ManageTagsDialog
+        dialog = ManageTagsDialog(self, image_path, self.db)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            # Refresh info panel after closing
+            self.display_image_info_from_db(image_path)
+        else:
+             # Refresh anyway in case changes were made but not "Saved" (dialog applies immediately)
+             self.display_image_info_from_db(image_path)
+
     def open_requirements_dialog(self):
         """Opens the dialog for checking and managing requirements."""
         # Import locally as per existing pattern
@@ -982,14 +996,44 @@ class ImageGallery(QMainWindow):
                 info_text += f"Date: {date_str}\n\n"
             else: info_text += f"Name: {os.path.basename(img_path)} (File not found)\n\n"
 
+            # 1. Rating (Top Priority)
             rating_tag = next((t for t in tags if t.category.lower() == 'rating' and t.tag.lower() == rating.lower()), None)
             rating_conf = rating_tag.confidence if rating_tag else 0.0
             rating_str = f"{rating} ({rating_conf:.1%}) [rating]"
+
+            # 2. Characters (Second Priority)
             char_tags = sorted([t for t in tags if t.category.lower() == 'character'], key=lambda t: t.confidence, reverse=True)
             char_str = ', '.join(f"{t.tag} ({t.confidence:.0%})" for t in char_tags)
-            info_text += f"{char_str} [character]\n{rating_str}\n\n" if char_str else f"{rating_str}\n\n"
+
+            # Combine Character and Rating block
+            info_text += f"{char_str} [character]\n" if char_str else ""
+            info_text += f"{rating_str}\n\n"
+
+            # 3. Other Categories (Grouped, excluding General)
+            # Find all categories present except the standard ones we handle explicitly
+            excluded_categories = {'rating', 'character', 'general'}
+            other_tags = [t for t in tags if t.category.lower() not in excluded_categories]
+
+            # Group by category
+            tags_by_category = defaultdict(list)
+            for tag in other_tags:
+                tags_by_category[tag.category].append(tag)
+
+            # Sort categories alphabetically
+            sorted_categories = sorted(tags_by_category.keys())
+
+            for cat in sorted_categories:
+                # Sort tags within category by confidence
+                cat_tags = sorted(tags_by_category[cat], key=lambda t: t.confidence, reverse=True)
+                for tag in cat_tags:
+                    info_text += f"{tag.tag} ({tag.confidence:.1%}) [{cat}]\n"
+                if cat_tags:
+                    info_text += "\n" # Spacing between groups
+
+            # 4. General Tags (Last)
             general_tags = sorted([t for t in tags if t.category.lower() == 'general'], key=lambda t: t.confidence, reverse=True)
             for tag in general_tags: info_text += f"{tag.tag} ({tag.confidence:.1%}) [general]\n"
+
         except Exception as e:
             print(f"Error formatting image info for {img_path}: {e}")
             info_text += f"\nError formatting info: {e}"

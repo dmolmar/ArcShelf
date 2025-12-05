@@ -69,6 +69,9 @@ class ImageLabel(QLabel):
         # --- Similarity Search ---
         search_similar_action = menu.addAction("Search Similar Images")
 
+        # --- Tag Management ---
+        manage_tags_action = menu.addAction("Manage Tags...")
+
         # --- Execute Menu ---
         action = menu.exec(self.mapToGlobal(event.pos()))
 
@@ -87,6 +90,9 @@ class ImageLabel(QLabel):
             self.gallery._copy_tags_to_clipboard(self.image_path) # ADDED
         elif action == search_similar_action:
             self.search_similar_images()
+        elif action == manage_tags_action:
+            if hasattr(self.gallery, 'open_manage_tags_dialog'):
+                self.gallery.open_manage_tags_dialog(self.image_path)
 
     def open_in_image_viewer(self):
         """Opens the image file using the system's default application."""
