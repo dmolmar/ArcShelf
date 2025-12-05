@@ -6,3 +6,4 @@ class TagPrediction:
     tag: str
     confidence: float
     category: str
+    is_manual: bool = False

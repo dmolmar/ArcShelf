@@ -24,7 +24,8 @@ def main():
 
     # Set AppUserModelID for Windows taskbar grouping and icon
     if sys.platform == "win32":
-        myappid = 'com.dmolmar.arcshelf.1'
+        # Changed ID to force icon cache refresh
+        myappid = 'com.dmolmar.arcshelf.v1.1'
         try:
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
         except AttributeError:

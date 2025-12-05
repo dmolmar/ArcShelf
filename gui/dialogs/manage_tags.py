@@ -30,14 +30,20 @@ class ManageTagsDialog(QDialog):
         self.setup_completer() # Setup auto-completion
 
         self.category_combo = QComboBox()
-        self.category_combo.addItems(["general", "character", "artist", "copyright", "meta"])
+        # self.category_combo.addItems(["general", "character", "artist", "copyright", "meta"]) # Loaded from DB now
         self.category_combo.setToolTip("Select category")
+        self.refresh_categories() # Load categories
+
+        self.manage_cats_button = QPushButton("Manage...")
+        self.manage_cats_button.setFixedWidth(80)
+        self.manage_cats_button.clicked.connect(self.open_manage_categories_dialog)
 
         self.add_button = QPushButton("Add Tag")
         self.add_button.clicked.connect(self.add_tag)
 
         add_layout.addWidget(self.tag_input)
         add_layout.addWidget(self.category_combo)
+        add_layout.addWidget(self.manage_cats_button) # Added button
         add_layout.addWidget(self.add_button)
         self.layout.addLayout(add_layout)
 
@@ -88,44 +94,27 @@ class ManageTagsDialog(QDialog):
         rating, tags = self.db.get_image_info_by_path(self.image_path)
 
         if tags:
-            # Sort tags: Manual first? Or by category?
-            # We don't have is_manual info in TagPrediction object returned by get_image_info_by_path.
-            # We might want to query directly to show visual distinction (e.g. bold for manual).
+            # Sort: Manual tags first, then by category, then name
+            # TagPrediction now has is_manual field
+            sorted_tags = sorted(tags, key=lambda t: (not getattr(t, 'is_manual', False), t.category, t.tag))
 
-            # Let's query directly to get is_manual status
-            try:
-                with self.db.lock:
-                    import sqlite3
-                    with sqlite3.connect(self.db.db_path) as conn:
-                        cursor = conn.cursor()
-                        img_id = self.db.get_image_id_from_path(self.image_path)
-                        cursor.execute("""
-                            SELECT t.name, t.category, it.is_manual
-                            FROM image_tags it
-                            JOIN tags t ON it.tag_id = t.id
-                            WHERE it.image_id = ?
-                            ORDER BY it.is_manual DESC, t.category, t.name
-                        """, (img_id,))
-                        rows = cursor.fetchall()
+            for tag in sorted_tags:
+                display_text = f"{tag.tag} ({tag.category})"
+                is_manual = getattr(tag, 'is_manual', False)
+                if is_manual:
+                    display_text += " [MANUAL]"
 
-                        for name, category, is_manual in rows:
-                            display_text = f"{name} ({category})"
-                            if is_manual:
-                                display_text += " [MANUAL]"
+                item = QListWidgetItem(display_text)
+                item.setData(Qt.ItemDataRole.UserRole, tag.tag) # Store tag name
 
-                            item = QListWidgetItem(display_text)
-                            item.setData(Qt.ItemDataRole.UserRole, name) # Store tag name
+                if is_manual:
+                    # Make manual tags visually distinct
+                    font = item.font()
+                    font.setBold(True)
+                    item.setFont(font)
+                    item.setForeground(Qt.GlobalColor.blue) # Or similar
 
-                            if is_manual:
-                                # Make manual tags visually distinct
-                                font = item.font()
-                                font.setBold(True)
-                                item.setFont(font)
-                                item.setForeground(Qt.GlobalColor.blue) # Or similar
-
-                            self.tags_list.addItem(item)
-            except Exception as e:
-                print(f"Error refreshing tags list: {e}")
+                self.tags_list.addItem(item)
 
         self.refresh_completer() # Also refresh autocomplete
 
@@ -157,3 +146,22 @@ class ManageTagsDialog(QDialog):
                 tag_name = item.data(Qt.ItemDataRole.UserRole)
                 self.db.remove_tag(self.image_path, tag_name)
             self.refresh_tags_list()
+
+    def refresh_categories(self):
+        current = self.category_combo.currentText()
+        self.category_combo.clear()
+        cats = self.db.get_all_categories()
+        self.category_combo.addItems(cats)
+        # Restore selection if possible, otherwise default to 'general'
+        index = self.category_combo.findText(current)
+        if index >= 0:
+            self.category_combo.setCurrentIndex(index)
+        else:
+            gen_index = self.category_combo.findText("general")
+            if gen_index >= 0: self.category_combo.setCurrentIndex(gen_index)
+
+    def open_manage_categories_dialog(self):
+        from .manage_categories import ManageCategoriesDialog
+        dialog = ManageCategoriesDialog(self, self.db)
+        dialog.exec()
+        self.refresh_categories()

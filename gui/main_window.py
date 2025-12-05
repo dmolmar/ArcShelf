@@ -1014,41 +1014,68 @@ class ImageGallery(QMainWindow):
                         aspect_ratio = width / height if height != 0 else 1.0
                         res_str = f"{width}x{height}"
                 except Exception: res_str, aspect_ratio = "N/A", 1.0
-                info_text += f"Name: {os.path.basename(img_path)}\n"
-                info_text += f"Size: {human_readable_size(file_size)}\n"
-                info_text += f"Resolution: {res_str}\n"
-                info_text += f"Aspect Ratio: {aspect_ratio:.2f}\n"
-                info_text += f"Date: {date_str}\n\n"
-            else: info_text += f"Name: {os.path.basename(img_path)} (File not found)\n\n"
+            # Block 1: File Info
+            info_text += f"<b>Name:</b> {os.path.basename(img_path)}<br>"
+            info_text += f"<b>Size:</b> {human_readable_size(file_size)}<br>"
+            info_text += f"<b>Resolution:</b> {res_str}<br>"
+            info_text += f"<b>Aspect Ratio:</b> {aspect_ratio:.2f}<br>"
+            info_text += f"<b>Date:</b> {date_str}<br>"
+            info_text += "<br>" # Gap between Block 1 and Block 2
 
+            # Group tags
             rating_tag = next((t for t in tags if t.category.lower() == 'rating' and t.tag.lower() == rating.lower()), None)
             rating_conf = rating_tag.confidence if rating_tag else 0.0
             rating_str = f"{rating} ({rating_conf:.1%}) [rating]"
+
             char_tags = sorted([t for t in tags if t.category.lower() == 'character'], key=lambda t: t.confidence, reverse=True)
-            char_str = ', '.join(f"{t.tag} ({t.confidence:.0%})" for t in char_tags)
-            info_text += f"{char_str} [character]\n{rating_str}\n\n" if char_str else f"{rating_str}\n\n"
-            general_tags = sorted([t for t in tags if t.category.lower() == 'general'], key=lambda t: t.confidence, reverse=True)
-            for tag in general_tags: info_text += f"{tag.tag} ({tag.confidence:.1%}) [general]\n"
+            
+            # Manual tags
+            manual_tags = sorted([t for t in tags if getattr(t, 'is_manual', False)], key=lambda t: (t.category, t.tag))
+            
+            # General/Other tags (exclude rating, character, and manual)
+            other_tags = sorted([t for t in tags if not getattr(t, 'is_manual', False) and t.category.lower() not in ('rating', 'character')], key=lambda t: t.confidence, reverse=True)
+
+            # Block 2: Special Tags (Character, Rating, Manual)
+            block2_parts = []
+            if char_tags:
+                char_str = ', '.join(f"{t.tag} ({t.confidence:.0%})" for t in char_tags)
+                block2_parts.append(f"<b>Character:</b> {char_str} [character]")
+            
+            block2_parts.append(f"<b>Rating:</b> {rating_str}")
+
+            if manual_tags:
+                # Desaturated color for manual tags (e.g., CadetBlue #5f9ea0)
+                manual_str = ', '.join(f"<span style='color:#5f9ea0'>{t.tag} [{t.category}]</span>" for t in manual_tags)
+                block2_parts.append(f"<b>Manual:</b> {manual_str}")
+
+            info_text += "<br>".join(block2_parts)
+            
+            if block2_parts:
+                info_text += "<br><br>" # Gap between Block 2 and Block 3
+
+            # Block 3: Other Tags
+            if other_tags:
+                for tag in other_tags: 
+                    info_text += f"{tag.tag} ({tag.confidence:.1%}) [{tag.category}]<br>"
+
         except Exception as e:
             print(f"Error formatting image info for {img_path}: {e}")
-            info_text += f"\nError formatting info: {e}"
+            info_text += f"<br>Error formatting info: {e}"
         return info_text
 
     @pyqtSlot(str)
     def update_info_text(self, text: str):
-        current_text = self.info_text.toPlainText()
-        max_lines = 500
-        lines = current_text.splitlines()
-        if len(lines) > max_lines:
-             current_text = "\n".join(lines[-max_lines:]) + "\n"
-             self.info_text.setPlainText(current_text)
+        # Append HTML or plain text
         self.info_text.moveCursor(QTextCursor.MoveOperation.End)
-        self.info_text.insertPlainText(text)
+        if "<" in text and ">" in text: # Simple check for HTML
+             self.info_text.insertHtml(text)
+        else:
+             self.info_text.insertPlainText(text)
         self.info_text.moveCursor(QTextCursor.MoveOperation.End)
 
     @pyqtSlot(str, str)
     def update_info_text_with_path(self, text: str, image_path: str):
-        self.info_text.setPlainText(text)
+        self.info_text.setHtml(text.replace('\n', '<br>')) # Ensure newlines are respected if mixed
         self.info_text.moveCursor(QTextCursor.MoveOperation.Start)
         # self.last_selected_image_path = image_path # Context updated elsewhere
 

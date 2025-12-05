@@ -48,6 +48,9 @@ class Database:
                         name TEXT UNIQUE NOT NULL, -- Added NOT NULL constraint
                         category TEXT
                     );
+                    CREATE TABLE IF NOT EXISTS categories (
+                        name TEXT PRIMARY KEY
+                    );
                     CREATE TABLE IF NOT EXISTS images (
                         id TEXT PRIMARY KEY,
                         path TEXT UNIQUE NOT NULL, -- Added NOT NULL constraint
@@ -83,6 +86,12 @@ class Database:
                             cursor.execute("ALTER TABLE image_tags ADD COLUMN is_manual INTEGER DEFAULT 0")
                         except sqlite3.Error as e:
                             print(f"Error adding is_manual column: {e}")
+
+                            print(f"Error adding is_manual column: {e}")
+ 
+                    # --- Populate Default Categories ---
+                    default_categories = ["general", "character", "artist", "copyright", "meta"]
+                    cursor.executemany("INSERT OR IGNORE INTO categories (name) VALUES (?)", [(c,) for c in default_categories])
 
                     conn.commit()
             # print("Database schema initialized/verified.") # Removed debug print
@@ -392,13 +401,13 @@ class Database:
                     if row:
                         image_id, rating = row
                         cursor.execute("""
-                            SELECT t.name, t.category, it.confidence
+                            SELECT t.name, t.category, it.confidence, it.is_manual
                             FROM image_tags it
                             JOIN tags t ON it.tag_id = t.id
                             WHERE it.image_id = ?
                             ORDER BY it.confidence DESC -- Optionally order tags
                         """, (image_id,))
-                        tags = [TagPrediction(tag, confidence, category) for tag, category, confidence in cursor.fetchall()]
+                        tags = [TagPrediction(tag, confidence, category, bool(is_manual)) for tag, category, confidence, is_manual in cursor.fetchall()]
                         return rating, tags
                     else:
                         return None, []
@@ -711,3 +720,41 @@ class Database:
                     print(f"Removed tag '{tag_name}' from image {image_id}")
         except sqlite3.Error as e:
             print(f"Database error removing tag: {e}")
+
+    def get_all_categories(self) -> List[str]:
+        """Retrieves all available tag categories."""
+        try:
+            with self.lock:
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT name FROM categories ORDER BY name")
+                    return [row[0] for row in cursor.fetchall()]
+        except sqlite3.Error as e:
+            print(f"Database error getting categories: {e}")
+            return []
+
+    def add_category(self, name: str) -> bool:
+        """Adds a new category. Returns True if successful."""
+        try:
+            with self.lock:
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("INSERT INTO categories (name) VALUES (?)", (name,))
+                    conn.commit()
+                    return True
+        except sqlite3.Error as e:
+            print(f"Database error adding category {name}: {e}")
+            return False
+
+    def delete_category(self, name: str) -> bool:
+        """Deletes a category. Returns True if successful."""
+        try:
+            with self.lock:
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("DELETE FROM categories WHERE name = ?", (name,))
+                    conn.commit()
+                    return True
+        except sqlite3.Error as e:
+            print(f"Database error deleting category {name}: {e}")
+            return False
