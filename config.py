@@ -7,6 +7,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / 'data'
 MODELS_DIR = BASE_DIR / 'models'
 CACHE_DIR = DATA_DIR / 'thumbnail_cache'
+TEMP_DIR = DATA_DIR / 'temp'
 
 # Define specific file paths
 DB_PATH = DATA_DIR / 'images.db'
@@ -21,6 +22,7 @@ SUPPORTED_FORMATS = ('.png', '.jpg', '.jpeg', '.webp', '.bmp', '.gif', '.tiff', 
 # Ensure data directories exist
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
+TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 # --- Other potential configurations ---
 # Example: Default thresholds (can be moved here later if needed)

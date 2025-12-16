@@ -4,6 +4,8 @@ import sys
 import os
 import subprocess
 import math
+import datetime
+import requests # Added requests
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional, List, Tuple
 
@@ -14,8 +16,10 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QPointF, QRectF, QSize
 from PyQt6.QtGui import (
     QDragEnterEvent, QDropEvent, QAction, QPixmap, QResizeEvent, QWheelEvent,
-    QMouseEvent, QPainter, QColor, QDragMoveEvent # Removed QBrush, QPen
+    QMouseEvent, QPainter, QColor, QDragMoveEvent, QKeyEvent, QKeySequence, QImage # Added QImage
 )
+
+import config # Import config for TEMP_DIR
 
 # Use TYPE_CHECKING for type hints to avoid circular imports
 if TYPE_CHECKING:
@@ -72,6 +76,7 @@ class DragDropArea(QGraphicsView):
         self.setAcceptDrops(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMinimumSize(100, 100)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus) # Enable focus for key events
 
         self._show_placeholder_text()
 
@@ -487,21 +492,32 @@ class DragDropArea(QGraphicsView):
         mime_data = event.mimeData()
         # print(f"[DEBUG] DragEnter: Mime types: {mime_data.formats()}")
 
+        accepted = False
+        
+        # 1. Check for Local Files
         if mime_data.hasUrls():
             urls = mime_data.urls()
-            accepted = False
             for url in urls:
                 if url.isLocalFile():
                     local_path = url.toLocalFile()
                     if local_path.lower().endswith(SUPPORTED_IMAGE_EXTENSIONS):
                         accepted = True
-                        break # Found one valid image
-            
-            if accepted:
-                event.acceptProposedAction()
-                # Change background color for visual feedback
-                self.setStyleSheet("QGraphicsView { background-color: #e0f0ff; }")
-                return
+                        break
+                else:
+                    # Accept remote URLs (http/https)
+                    if url.scheme() in ('http', 'https'):
+                        accepted = True
+                        break
+        
+        # 2. Check for Image Data
+        if not accepted and mime_data.hasImage():
+            accepted = True
+
+        if accepted:
+            event.acceptProposedAction()
+            # Change background color for visual feedback
+            self.setStyleSheet("QGraphicsView { background-color: #e0f0ff; }")
+            return
 
         event.ignore()
 
@@ -512,63 +528,223 @@ class DragDropArea(QGraphicsView):
 
     def dragMoveEvent(self, event: QDragMoveEvent):
         """Handles drag move events to continuously accept valid image drags."""
+        # Re-use logic from dragEnterEvent implicitly by accepting if accepted in enter
+        # But we should re-check to be safe and consistent
         mime_data = event.mimeData()
+        accepted = False
+        
         if mime_data.hasUrls():
             urls = mime_data.urls()
-            if any(url.isLocalFile() and url.toLocalFile().lower().endswith(SUPPORTED_IMAGE_EXTENSIONS) for url in urls):
-                event.acceptProposedAction()
-                # No need to set stylesheet here, dragEnterEvent handles initial style
-                return # Exit after accepting
-        event.ignore() # Ignore otherwise
+            for url in urls:
+                if url.isLocalFile():
+                    if url.toLocalFile().lower().endswith(SUPPORTED_IMAGE_EXTENSIONS):
+                        accepted = True; break
+                elif url.scheme() in ('http', 'https'):
+                    accepted = True; break
+        
+        if not accepted and mime_data.hasImage():
+            accepted = True
+
+        if accepted:
+            event.acceptProposedAction()
+            return
+        
+        event.ignore()
 
     def dropEvent(self, event: QDropEvent):
         self.setStyleSheet("") # Reset style
-        urls = event.mimeData().urls()
-        path_to_process = None
-        if urls:
-            url = urls[0] # Process only the first dropped file
-            if url.isLocalFile():
-                path = url.toLocalFile()
-                if path.lower().endswith(SUPPORTED_IMAGE_EXTENSIONS):
-                    path_to_process = path
-                else:
-                    print(f"DragDropArea: Dropped file is not a supported image: {path}")
-            else:
-                 print(f"DragDropArea: Dropped URL is not a local file: {url.toString()}")
+        mime_data = event.mimeData()
+        
+        # 1. Check for Local Files (Priority 1)
+        if mime_data.hasUrls():
+            # Check if there's at least one local file
+            for url in mime_data.urls():
+                if url.isLocalFile():
+                    path = url.toLocalFile()
+                    if path.lower().endswith(SUPPORTED_IMAGE_EXTENSIONS):
+                        self._process_dropped_or_pasted_image(path)
+                        event.acceptProposedAction()
+                        return
 
-        if path_to_process:
-            # print(f"[DEBUG] DragDropArea: Processing dropped path: {path_to_process}")
-            self.dropped_image_path = path_to_process
-            self.temporary_predictions = None # Clear old predictions
+        # 2. Check for Image Data (Priority 2 - Faster than download)
+        # If the browser provides the image data directly (even during drag), use it.
+        if mime_data.hasImage():
+            image = QImage(mime_data.imageData())
+            if not image.isNull():
+                print("DragDropArea: Dropped raw image data (using instead of URL download).")
+                self._save_and_process_pasted_image(image)
+                event.acceptProposedAction()
+                return
+        
+        # 3. Check for Remote URLs (Priority 3 - Fallback to download)
+        if mime_data.hasUrls():
+             url = mime_data.urls()[0]
+             if url.scheme() in ('http', 'https'):
+                print(f"DragDropArea: Dropped remote URL (Image data not found/valid): {url.toString()}")
+                self._download_and_process_image_url(url.toString())
+                event.acceptProposedAction()
+                return
 
-            # Load the image using QPixmap
-            pixmap = QPixmap(path_to_process)
-            if pixmap.isNull():
-                 print(f"[ERROR] DragDropArea: QPixmap load FAILED for: {path_to_process}")
-                 self.set_image(None) # Show placeholder on load failure
-                 event.ignore()
+        event.ignore()
+
+    def keyPressEvent(self, event: QKeyEvent):
+        """Handle paste (Ctrl+V) events."""
+        if event.matches(QKeySequence.StandardKey.Paste):
+            self._handle_paste_event()
+        else:
+            super().keyPressEvent(event)
+
+    def _handle_paste_event(self):
+        """Processes clipboard content for images, file paths, or image URLs."""
+        clipboard = QApplication.clipboard()
+        mime_data = clipboard.mimeData()
+        
+        print(f"DragDropArea: Paste event. Available formats: {mime_data.formats()}")
+
+        # 1. Check for Local Files (e.g. copied from Explorer)
+        if mime_data.hasUrls():
+            urls = mime_data.urls()
+            for url in urls:
+                if url.isLocalFile():
+                    path = url.toLocalFile()
+                    if path.lower().endswith(SUPPORTED_IMAGE_EXTENSIONS):
+                        print(f"DragDropArea: Pasted local file path: {path}")
+                        self._process_dropped_or_pasted_image(path)
+                        return
+
+        # 2. Check for Raw Image Data (e.g. "Copy Image" from browser/app)
+        if mime_data.hasImage():
+            image = clipboard.image()
+            if not image.isNull():
+                print("DragDropArea: Pasted raw image data (hasImage=True).")
+                self._save_and_process_pasted_image(image)
+                return
+        
+        # 3. Fallback: Check specific image mime types
+        for fmt in mime_data.formats():
+            if fmt.startswith('image/'):
+                print(f"DragDropArea: Found image mime type: {fmt}")
+                data = mime_data.data(fmt)
+                image = QImage.fromData(data)
+                if not image.isNull():
+                    print(f"DragDropArea: Successfully loaded image from data ({fmt}).")
+                    self._save_and_process_pasted_image(image)
+                    return
+
+        # 4. Check for Image URLs (e.g. "Copy Image Link" or sometimes "Copy Image" puts URL in text)
+        if mime_data.hasText():
+            text = mime_data.text().strip()
+            # Basic check if it looks like a URL and has an image extension
+            # Note: Some URLs might not have extensions, but we start with this safety check
+            if text.startswith(('http://', 'https://')):
+                 print(f"DragDropArea: Found URL in clipboard: {text}")
+                 # Try to download it
+                 self._download_and_process_image_url(text)
                  return
 
-            # This triggers LOD generation and fitting
-            self.set_image(pixmap)
+        print("DragDropArea: Clipboard does not contain a supported image, file path, or URL.")
 
-            # Show processing message immediately
-            if hasattr(self.image_gallery, 'updateInfoTextSignal'):
-                # Use the signal that sets text and scrolls to top for consistency
-                self.image_gallery.imageInfoSignal.emit(f"Processing {os.path.basename(path_to_process)}...", path_to_process)
+    def _download_and_process_image_url(self, url: str):
+        """Downloads an image from a URL to a temp file and processes it."""
+        print(f"DragDropArea: Attempting to download image from {url}")
+        
+        # Notify user of download start
+        if hasattr(self.image_gallery, 'updateInfoTextSignal'):
+             self.image_gallery.updateInfoTextSignal.emit(f"Downloading image from clipboard URL...")
 
-            # Notify the main gallery to process metadata/tags etc.
-            if hasattr(self.image_gallery, 'process_image_info'):
-                # Use the callback to receive temporary predictions asynchronously if needed
-                self.image_gallery.process_image_info(
-                    path_to_process,
-                    analyze=True, # Assume analysis is wanted on drop
-                    store_temp_predictions_callback=self.set_temporary_predictions
-                )
-            event.acceptProposedAction()
+        def download_task():
+            try:
+                response = requests.get(url, stream=True, timeout=10)
+                response.raise_for_status()
+                
+                # Try to guess extension from content-type or url
+                content_type = response.headers.get('content-type', '')
+                ext = '.png' # Default
+                if 'image/jpeg' in content_type: ext = '.jpg'
+                elif 'image/webp' in content_type: ext = '.webp'
+                elif 'image/gif' in content_type: ext = '.gif'
+                elif url.lower().endswith(SUPPORTED_IMAGE_EXTENSIONS):
+                    ext = Path(url).suffix
+                
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                temp_filename = f"downloaded_{timestamp}{ext}"
+                temp_path = config.TEMP_DIR / temp_filename
+                config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
+
+                with open(temp_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                
+                return str(temp_path)
+            except Exception as e:
+                print(f"DragDropArea: Download failed: {e}")
+                return None
+
+        def handle_download_result(path):
+            if path:
+                print(f"DragDropArea: Download successful: {path}")
+                self._process_dropped_or_pasted_image(path)
+            else:
+                if hasattr(self.image_gallery, 'updateInfoTextSignal'):
+                    self.image_gallery.updateInfoTextSignal.emit(f"Failed to download image from clipboard URL.")
+
+        # Use the existing threadpool from image_gallery if available, or create a worker
+        # Since DragDropArea doesn't have direct access to threadpool, we can use the one in image_gallery
+        if hasattr(self.image_gallery, 'threadpool'):
+             from utils.workers import Worker # Ensure Worker is available
+             worker = Worker(download_task)
+             worker.signals.finished.connect(handle_download_result)
+             self.image_gallery.threadpool.start(worker)
         else:
-            # No valid image path found
-            event.ignore()
+             print("DragDropArea: Cannot download - no threadpool available.")
+
+    def _save_and_process_pasted_image(self, image):
+        """Saves raw image data to a temp file and processes it."""
+        try:
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            temp_filename = f"pasted_{timestamp}.png"
+            temp_path = config.TEMP_DIR / temp_filename
+            
+            # Ensure temp dir exists (it should from config.py, but safety first)
+            config.TEMP_DIR.mkdir(parents=True, exist_ok=True)
+
+            if image.save(str(temp_path), "PNG"):
+                print(f"DragDropArea: Saved pasted image to {temp_path}")
+                self._process_dropped_or_pasted_image(str(temp_path))
+            else:
+                print("DragDropArea: Failed to save pasted image to temp file.")
+        except Exception as e:
+            print(f"DragDropArea: Error saving pasted image: {e}")
+
+    def _process_dropped_or_pasted_image(self, path_to_process: str):
+        """Common logic for handling a new image path (from drop or paste)."""
+        # print(f"[DEBUG] DragDropArea: Processing path: {path_to_process}")
+        self.dropped_image_path = path_to_process
+        self.temporary_predictions = None # Clear old predictions
+
+        # Load the image using QPixmap
+        pixmap = QPixmap(path_to_process)
+        if pixmap.isNull():
+                print(f"[ERROR] DragDropArea: QPixmap load FAILED for: {path_to_process}")
+                self.set_image(None) # Show placeholder on load failure
+                return
+
+        # This triggers LOD generation and fitting
+        self.set_image(pixmap)
+
+        # Show processing message immediately
+        if hasattr(self.image_gallery, 'updateInfoTextSignal'):
+            # Use the signal that sets text and scrolls to top for consistency
+            self.image_gallery.imageInfoSignal.emit(f"Processing {os.path.basename(path_to_process)}...", path_to_process)
+
+        # Notify the main gallery to process metadata/tags etc.
+        if hasattr(self.image_gallery, 'process_image_info'):
+            # Use the callback to receive temporary predictions asynchronously if needed
+            self.image_gallery.process_image_info(
+                path_to_process,
+                analyze=True, # Assume analysis is wanted on drop/paste
+                store_temp_predictions_callback=self.set_temporary_predictions
+            )
 
 
     # --- Callback and Context Menu ---

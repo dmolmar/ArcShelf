@@ -21,7 +21,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtGui import (
     QPixmap, QDragEnterEvent, QDropEvent, QShortcut, QImage, # Added QImage
-    QIcon, QTextCursor, QAction, QKeyEvent
+    QIcon, QTextCursor, QAction, QKeyEvent, QKeySequence
 )
 from PyQt6.QtCore import (
     Qt, QTimer, pyqtSignal, QObject, pyqtSlot, QRunnable, QThreadPool, QSize, QMimeData # Added QMimeData
@@ -144,6 +144,9 @@ class ImageGallery(QMainWindow):
 
         # Load initial active directories from DB
         self._load_initial_active_directories()
+
+        # Cleanup temporary files on startup
+        self.cleanup_temp_files()
 
         # Model Initialization
         self.model = ImageTaggerModel(config.MODEL_PATH, config.TAGS_CSV_PATH)
@@ -364,6 +367,10 @@ class ImageGallery(QMainWindow):
         self.central_widget.setFocus()
         QShortcut(Qt.Key.Key_Left, self, self.go_to_previous_page)
         QShortcut(Qt.Key.Key_Right, self, self.go_to_next_page)
+        
+        # Global Paste Shortcut
+        self.paste_shortcut = QShortcut(QKeySequence.StandardKey.Paste, self)
+        self.paste_shortcut.activated.connect(self.handle_global_paste)
 
     def setup_signals(self):
         """Connect signals to slots."""
@@ -413,6 +420,7 @@ class ImageGallery(QMainWindow):
         app_instance = QApplication.instance()
         if app_instance:
              app_instance.aboutToQuit.connect(self.unload_model_safely)
+             app_instance.aboutToQuit.connect(self.cleanup_temp_files) # Cleanup on exit
 
         self.imageAnalysisSignal.connect(self.update_info_text)
         self.imageInfoSignal.connect(self.update_info_text_with_path)
@@ -448,6 +456,21 @@ class ImageGallery(QMainWindow):
             # Tags will be fetched from DB inside _perform_similarity_search if needed
         )
 
+    def cleanup_temp_files(self):
+        """Removes temporary files from the temp directory."""
+        print("Cleaning up temporary files...")
+        try:
+            if config.TEMP_DIR.exists():
+                for item in config.TEMP_DIR.iterdir():
+                    if item.is_file():
+                        try:
+                            item.unlink()
+                        except Exception as e:
+                            print(f"Error deleting temp file {item}: {e}")
+            print("Temp cleanup complete.")
+        except Exception as e:
+             print(f"Error during temp cleanup: {e}")
+
     # --- Event Handlers ---
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -462,6 +485,34 @@ class ImageGallery(QMainWindow):
         if key == Qt.Key.Key_Left: self.go_to_previous_page()
         elif key == Qt.Key.Key_Right: self.go_to_next_page()
         else: super().keyPressEvent(event)
+
+    def handle_global_paste(self):
+        """Handles global paste events (Ctrl+V) by forwarding them to the drag drop area."""
+        # Only forward if the focus is NOT on a text input widget
+        focus_widget = QApplication.focusWidget()
+        if isinstance(focus_widget, (QLineEdit, QTextEdit)):
+            # Let the text widget handle the paste normally
+            # We can't easily "pass it through" from a QShortcut, but QShortcut
+            # usually consumes the event.
+            # However, standard widgets handle Ctrl+V via their own event handlers.
+            # If QShortcut is triggered, it might eat it.
+            # To avoid conflict, we might need to check focus before acting,
+            # OR rely on the fact that QShortcut context is WindowShortcut by default.
+            # If we want text widgets to work, we should probably NOT use a global shortcut
+            # that swallows the event, or we should manually paste into the widget.
+            
+            # Better approach: Check if we should handle it.
+            # If a text widget has focus, do nothing here (let the widget's own handler work?
+            # But QShortcut might have already intercepted it).
+            
+            # Actually, QShortcut with WindowShortcut context takes precedence.
+            # So we must manually trigger paste on the focused widget if it's a text input.
+            if hasattr(focus_widget, 'paste'):
+                focus_widget.paste()
+            return
+
+        print("Global paste triggered: Forwarding to DragDropArea")
+        self.drag_drop_area._handle_paste_event()
 
     def on_splitter_moved(self, pos, index):
         self.splitter_resize_timer.start(50)
