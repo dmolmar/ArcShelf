@@ -86,8 +86,6 @@ class Database:
                             cursor.execute("ALTER TABLE image_tags ADD COLUMN is_manual INTEGER DEFAULT 0")
                         except sqlite3.Error as e:
                             print(f"Error adding is_manual column: {e}")
-
-                            print(f"Error adding is_manual column: {e}")
  
                     # --- Populate Default Categories ---
                     default_categories = ["general", "character", "artist", "copyright", "meta"]

@@ -28,8 +28,8 @@ from PyQt6.QtCore import (
 )
 from PIL import Image, UnidentifiedImageError
 
-# Import the new normalization function
-from utils.path_utils import normalize_path
+# Import the normalization and utility functions
+from utils.path_utils import normalize_path, human_readable_size
 
 # --- Local Imports (within arc_explorer package) ---
 import config # For base directory, paths
@@ -49,25 +49,6 @@ from gui.widgets.advanced_search import AdvancedSearchPanel # Import the actual 
 # from .dialogs.manage_directories import ManageDirectoriesDialog
 # from .dialogs.export_jpg import ExportAsJPGDialog
 # from .dialogs.requirements_dialog import RequirementsDialog # Already imported where needed
-
-# --- Utility Function (Consider moving to utils module later) ---
-def human_readable_size(size_bytes: Optional[int]) -> str:
-    """Converts size in bytes to human-readable string."""
-    if size_bytes is None or size_bytes < 0:
-        return "N/A"
-    if size_bytes == 0:
-        return "0 B"
-    size_name = ("B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB")
-    try:
-        i = int(math.floor(math.log(size_bytes, 1024)))
-        # Clamp index to the range of size_name
-        i = max(0, min(i, len(size_name) - 1))
-        p = math.pow(1024, i)
-        s = round(size_bytes / p, 2)
-        return f"{s} {size_name[i]}"
-    except (ValueError, OverflowError):
-        # Handle potential math errors for very large numbers
-        return f"{size_bytes} B"
 
 # --- Main Application Window ---
 class ImageGallery(QMainWindow):
@@ -131,7 +112,7 @@ class ImageGallery(QMainWindow):
 
         # --- Initialization ---
         self.threadpool = QThreadPool()
-        print(f"Multithreading with maximum {self.threadpool.maxThreadCount()} threads")
+
 
         # Database and Thumbnail Cache
         self.thumbnail_cache = ThumbnailCache(config.CACHE_DIR)
@@ -190,7 +171,7 @@ class ImageGallery(QMainWindow):
         # Removed call to _check_requirements_on_startup
     def _load_initial_active_directories(self):
         """Loads all unique directories from DB as initially active."""
-        print("Loading initial active directories...")
+
         try:
             with self.db.lock, sqlite3.connect(self.db.db_path) as conn:
                 cursor = conn.cursor()
@@ -206,7 +187,7 @@ class ImageGallery(QMainWindow):
                             self.active_directories.add(normalized_dir)
                 except Exception as e:
                     print(f"Error parsing directory from path '{path_str}': {e}")
-            print(f"Initial active directories: {self.active_directories}")
+
         except sqlite3.Error as e:
             print(f"Error loading initial directories from DB: {e}")
 
@@ -444,7 +425,7 @@ class ImageGallery(QMainWindow):
     # --- Helper Method for Context Menu Actions ---
     def search_similar_images(self, image_path: str):
         """Initiates a similarity search based on the provided image path."""
-        print(f"ImageGallery: search_similar_images called for: {image_path}")
+
         # Update the last selected path for context
         self.last_selected_image_path = image_path
         # Display the image in the preview area
@@ -458,7 +439,7 @@ class ImageGallery(QMainWindow):
 
     def cleanup_temp_files(self):
         """Removes temporary files from the temp directory."""
-        print("Cleaning up temporary files...")
+
         try:
             if config.TEMP_DIR.exists():
                 for item in config.TEMP_DIR.iterdir():
@@ -467,7 +448,7 @@ class ImageGallery(QMainWindow):
                             item.unlink()
                         except Exception as e:
                             print(f"Error deleting temp file {item}: {e}")
-            print("Temp cleanup complete.")
+
         except Exception as e:
              print(f"Error during temp cleanup: {e}")
 
@@ -511,7 +492,7 @@ class ImageGallery(QMainWindow):
                 focus_widget.paste()
             return
 
-        print("Global paste triggered: Forwarding to DragDropArea")
+
         self.drag_drop_area._handle_paste_event()
 
     def on_splitter_moved(self, pos, index):
@@ -560,14 +541,14 @@ class ImageGallery(QMainWindow):
     @pyqtSlot(set)
     def update_active_directories_from_dialog(self, new_active_set: Set[str]):
         if self.active_directories != new_active_set:
-            print(f"Updating active directories from dialog: {new_active_set}")
+
             self.active_directories = new_active_set
             self.perform_search()
             self.update_suggestions()
 
     # --- Gallery Display Logic ---
     def arrange_rows(self):
-        print("Arrange rows called")
+
         # --- Clear existing widgets ---
         # Use a safer loop to remove items and ensure proper deletion
         while self.scroll_layout.count():
@@ -594,7 +575,7 @@ class ImageGallery(QMainWindow):
         # QApplication.processEvents()
 
         if not self.all_images:
-            print("No images to display.")
+
             no_img_label = QLabel("No images found matching your criteria.")
             no_img_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
             self.scroll_layout.addWidget(no_img_label)
@@ -622,7 +603,7 @@ class ImageGallery(QMainWindow):
             images_on_page = self.all_images[start_index:end_index]
 
             if not images_on_page:
-                 print("No images for the current page.")
+
                  no_page_label = QLabel("No images on this page.")
                  no_page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
                  self.scroll_layout.addWidget(no_page_label)
@@ -842,7 +823,7 @@ class ImageGallery(QMainWindow):
 
     def on_sorting_changed(self):
         if self.suppress_search_on_dropdown_update: return
-        print(f"Sorting changed to: {self.sorting_combo.currentText()}")
+
         current_sort = self.sorting_combo.currentText()
         is_random = (current_sort == "Random")
         self.sort_order_combo.setEnabled(not is_random)
@@ -855,12 +836,12 @@ class ImageGallery(QMainWindow):
 
     def on_sort_order_changed(self):
         if self.suppress_search_on_dropdown_update: return
-        print(f"Sort order changed to: {self.sort_order_combo.currentText()}")
+
         self.perform_search()
 
     # --- Image Interaction & Info Display ---
     def handle_image_click(self, img_path: str, analyze: bool = False):
-        print(f"ImageGallery: Handling click for image: {img_path}, analyze={analyze}")
+
         self.last_selected_image_path = img_path
         self.display_image_in_preview(img_path)
         self.process_image_info(img_path, analyze=analyze)
@@ -876,7 +857,7 @@ class ImageGallery(QMainWindow):
              print("ImageGallery: display_image_in_preview - Invalid target.")
              return
 
-        print(f"ImageGallery: Displaying image in preview target: {img_path}")
+
         # Optionally show "Loading..." text (though set_image handles placeholder)
         # target_view.set_image(None) # Clear previous and show placeholder
 

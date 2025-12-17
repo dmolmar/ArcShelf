@@ -4,7 +4,6 @@ from PyQt6.QtWidgets import (
     QCompleter, QWidget
 )
 from PyQt6.QtCore import Qt, QStringListModel
-from PyQt6.QtGui import QStandardItemModel, QStandardItem
 from database.db_manager import Database
 
 class ManageTagsDialog(QDialog):

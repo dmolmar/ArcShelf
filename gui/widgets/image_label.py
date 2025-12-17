@@ -2,10 +2,11 @@ import sys
 import os
 import subprocess
 from pathlib import Path
-from typing import Callable, TYPE_CHECKING
+from typing import Callable, Optional, TYPE_CHECKING
 
 from PyQt6.QtWidgets import QLabel, QMenu, QApplication, QSizePolicy
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QUrl, QMimeData, QPointF
+from PyQt6.QtGui import QDrag, QPixmap
 
 # Use TYPE_CHECKING to avoid circular imports for type hints
 if TYPE_CHECKING:
@@ -34,6 +35,7 @@ class ImageLabel(QLabel):
         # often gallery.handle_image_click, passing self.image_path
         self.on_click_callback = on_click_callback
         self.gallery = gallery
+        self._drag_start_pos: Optional[QPointF] = None  # For drag-to-external detection
         self.setToolTip(image_path) # Show full path on hover
         # Allow the label to expand horizontally and vertically
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -42,15 +44,65 @@ class ImageLabel(QLabel):
         self.setAlignment(Qt.AlignmentFlag.AlignCenter) # Center the image
 
     def mousePressEvent(self, event):
-        """Handles left-click events to trigger the callback."""
+        """Handles left-click events and saves position for potential drag."""
         if event.button() == Qt.MouseButton.LeftButton:
-            # Call the provided callback, passing the image path
-            # The callback itself (e.g., gallery.handle_image_click) will decide
-            # if analysis is needed based on context.
-            # We pass analyze=False here as the default click action.
-            self.on_click_callback(self.image_path, analyze=False)
-        # Pass other mouse events to the base class
+            # Save position for potential drag-to-external
+            self._drag_start_pos = event.position()
+        else:
+            self._drag_start_pos = None
+        # Pass to base class (don't call callback here, wait for release or drag)
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        """Detects drag gestures and initiates external drag."""
+        if self._drag_start_pos is not None:
+            current_pos = event.position()
+            distance = (current_pos - self._drag_start_pos).manhattanLength()
+            if distance >= QApplication.startDragDistance():
+                self._start_external_drag()
+                self._drag_start_pos = None  # Reset after starting drag
+                return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        """Handles mouse release - triggers callback if no drag occurred."""
+        if event.button() == Qt.MouseButton.LeftButton and self._drag_start_pos is not None:
+            # No drag occurred (we would have reset _drag_start_pos), so trigger click
+            self._drag_start_pos = None
+            self.on_click_callback(self.image_path, analyze=False)
+        super().mouseReleaseEvent(event)
+
+    def _start_external_drag(self):
+        """Initiate a drag operation to external applications."""
+        if not self.image_path or not Path(self.image_path).exists():
+            print(f"ImageLabel: Cannot start external drag - invalid path: {self.image_path}")
+            return
+        
+        print(f"ImageLabel: Starting external drag for: {self.image_path}")
+        
+        # Create mime data with the file URL
+        mime_data = QMimeData()
+        file_url = QUrl.fromLocalFile(self.image_path)
+        mime_data.setUrls([file_url])
+        
+        # Create and execute the drag operation
+        drag = QDrag(self)
+        drag.setMimeData(mime_data)
+        
+        # Use the current thumbnail pixmap as drag preview
+        current_pixmap = self.pixmap()
+        if current_pixmap and not current_pixmap.isNull():
+            # Scale to reasonable drag preview size
+            preview_size = 128
+            preview_pixmap = current_pixmap.scaled(
+                preview_size, preview_size,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            drag.setPixmap(preview_pixmap)
+        
+        # Execute the drag (Copy action is default for file drags)
+        drag.exec(Qt.DropAction.CopyAction)
 
     def contextMenuEvent(self, event):
         """Creates and shows a context menu for image actions."""

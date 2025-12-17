@@ -2,6 +2,9 @@ import sys
 import ctypes
 import traceback
 from pathlib import Path
+# CRITICAL: This import MUST come BEFORE PyQt6 imports. Loading onnxruntime
+# before PyQt6 ensures correct DLL resolution on Windows. Moving this import
+# after PyQt6 will cause "DLL load failed" errors for onnxruntime.
 from image_processing.tagger import ImageTaggerModel
 
 from PyQt6.QtWidgets import QApplication, QMessageBox

@@ -74,14 +74,14 @@ class AdvancedSearchPanel(QWidget):
         Receives confirmation status from ImageGallery.
         Sets flag to allow/disallow search on current Enter press.
         """
-        print(f"ASP: Received suggestionConfirmationFinished({confirmation_happened})")
+
         # If confirmation happened, the Enter press was used for that, so don't search.
         # If it didn't happen (no item selected), allow search.
         self._allow_enter_search = not confirmation_happened
 
         # If search is allowed now, manually trigger it (since we consumed the event)
         if self._allow_enter_search:
-             print("  Confirmation didn't happen, triggering search manually.")
+
              self._emit_search_request()
 
     def eventFilter(self, watched_object: QObject, event: QEvent) -> bool:
@@ -98,28 +98,28 @@ class AdvancedSearchPanel(QWidget):
                     return True
 
                 elif key == Qt.Key.Key_Return or key == Qt.Key.Key_Enter:
-                    print("ASP: Intercepted Enter Key.")
+
                     if suggestions_active:
                         # Reset flag before asking for confirmation
                         self._allow_enter_search = False # Assume Enter is for confirmation first
-                        print("  Suggestions active, emitting confirmSuggestion.")
+
                         self.confirmSuggestion.emit() # Ask IG to handle confirmation
                         # We MUST consume the event here, and wait for the signal back
                         # to decide if a search should happen *afterwards*.
                         return True
                     else:
                         # No suggestions active, allow default Enter behavior (triggers search)
-                        print("  Suggestions not active, allowing default Enter.")
+
                         return False # Let QLineEdit handle it -> _emit_search_request
                     
             elif event.type() == QEvent.Type.FocusIn:
-                print("AdvancedSearchPanel: search_field Focus In")
+
                 self.focusGained.emit()
             elif event.type() == QEvent.Type.FocusOut:
-                print("AdvancedSearchPanel: search_field Focus Out")
+
                 self.focusLost.emit()
             elif event.type() == QEvent.Type.MouseButtonDblClick:
-                print("AdvancedSearchPanel: Double Click Detected")
+
                 # ... (keep existing double-click logic) ...
                 click_char_pos = self.search_field.cursorPositionAt(event.pos())
                 current_text = self.search_field.text()
@@ -132,7 +132,7 @@ class AdvancedSearchPanel(QWidget):
                         op_start, op_end = match.span()
                         # Check if the double-click position falls within this operator match
                         if op_start <= click_char_pos < op_end:
-                            print(f"  Double-click on Operator: '{match.group()}' ({op_start}-{op_end})")
+
                             # Select only the operator
                             self.search_field.setSelection(op_start, op_end - op_start)
                             # Ensure no suggestions are shown (by emitting focusLost? or just hiding?)
@@ -161,7 +161,7 @@ class AdvancedSearchPanel(QWidget):
                     self.tagSegmentSelected.emit(selected_text)
                     return True
                 else:
-                     print("  Double-click boundary detection failed, allowing default.") # Debug
+                    pass  # Boundary detection failed, allow default behavior
                 # --- End Existing Logic ---
 
         # Return False to allow the event to be processed further if not handled
@@ -271,16 +271,12 @@ class AdvancedSearchPanel(QWidget):
             end_pos = cursor_pos
             # Or maybe use the old simpler logic here?
             # Let's stick with the stricter boundary check for now. If None, do nothing.
-            print("insert_suggestion: Aborting insertion due to unclear boundaries.")
+
             return
 
         start_pos, end_pos = boundaries
 
-        print(f"Original text: '{current_text}'")
-        print(f"Cursor pos: {cursor_pos}")
-        print(f"Found segment boundaries: start={start_pos}, end={end_pos}")
-        print(f"Segment to replace: '{current_text[start_pos:end_pos]}'")
-        print(f"Inserting: '{tag_to_insert}'")
+
 
         new_text_parts = []
         new_text_parts.append(current_text[:start_pos])
@@ -298,8 +294,7 @@ class AdvancedSearchPanel(QWidget):
         new_cursor_pos = start_pos + len(tag_to_insert)
         if needs_space_after: new_cursor_pos += 1
 
-        print(f"Resulting text: '{new_text}'")
-        print(f"New cursor pos: {new_cursor_pos}")
+
 
         self.search_field.blockSignals(True)
         self.search_field.setText(new_text)

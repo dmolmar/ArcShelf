@@ -27,15 +27,12 @@ from utils.workers import Worker
 # Assuming config might be needed for paths, etc.
 import config
 
-# Import the new normalization function
-from utils.path_utils import normalize_path
+# Import the normalization and utility functions
+from utils.path_utils import normalize_path, human_readable_size
 
 # Use TYPE_CHECKING for type hints to avoid circular imports
 if TYPE_CHECKING:
-    from gui.main_window import ImageGallery # The main application window
-
-# Import utility function from main window (Ideally move to utils later)
-from gui.main_window import human_readable_size
+    from gui.main_window import ImageGallery
 
 class ManageDirectoriesDialog(QDialog):
     """Dialog for managing image directories, processing, and duplicate detection."""

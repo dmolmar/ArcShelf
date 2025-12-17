@@ -13,10 +13,11 @@ from PyQt6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsPixmapItem, QGraphicsTextItem,
     QMenu, QApplication, QSizePolicy, QFrame, QFileDialog
 )
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QPointF, QRectF, QSize
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QPointF, QRectF, QSize, QUrl, QMimeData
 from PyQt6.QtGui import (
     QDragEnterEvent, QDropEvent, QAction, QPixmap, QResizeEvent, QWheelEvent,
-    QMouseEvent, QPainter, QColor, QDragMoveEvent, QKeyEvent, QKeySequence, QImage # Added QImage
+    QMouseEvent, QPainter, QColor, QDragMoveEvent, QKeyEvent, QKeySequence, QImage,
+    QDrag  # Added for drag-to-external
 )
 
 import config # Import config for TEMP_DIR
@@ -56,6 +57,7 @@ class DragDropArea(QGraphicsView):
         self._lods: List[Tuple[int, QPixmap]] = []
         self._is_panning: bool = False
         self._last_pan_point: QPointF = QPointF()
+        self._drag_start_pos: Optional[QPointF] = None  # For drag-to-external detection
         self._current_view_scale: float = 1.0
         self._fit_scale_full_res: float = 1.0
 
@@ -441,8 +443,11 @@ class DragDropArea(QGraphicsView):
             event.ignore()
 
     def mousePressEvent(self, event: QMouseEvent):
-        """Handle mouse press for panning."""
+        """Handle mouse press for panning and drag-to-external."""
         if self._pixmap_item and event.button() == Qt.MouseButton.LeftButton:
+            # Save position for potential drag-to-external
+            self._drag_start_pos = event.position()
+            
             # Allow panning if the view scale is noticeably larger than the fit scale
             # (meaning the image content is larger than the view)
             # Using a slightly larger tolerance might feel better
@@ -453,13 +458,14 @@ class DragDropArea(QGraphicsView):
                 self.setCursor(Qt.CursorShape.ClosedHandCursor)
                 event.accept()
             else:
-                 # Not zoomed in enough to pan, pass event up
-                 super().mousePressEvent(event)
+                 # Not zoomed in enough to pan, but we might drag to external
+                 event.accept()
         else:
+            self._drag_start_pos = None
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent):
-        """Handle mouse move events for panning."""
+        """Handle mouse move events for panning and drag-to-external."""
         if self._is_panning:
             # Calculate delta in viewport coordinates
             current_pos = event.position()
@@ -475,17 +481,66 @@ class DragDropArea(QGraphicsView):
             # Update the last pan point
             self._last_pan_point = current_pos
             event.accept()
+        elif self._drag_start_pos is not None:
+            # Check if we should start a drag-to-external operation
+            current_pos = event.position()
+            distance = (current_pos - self._drag_start_pos).manhattanLength()
+            if distance >= QApplication.startDragDistance():
+                self._start_external_drag()
+                self._drag_start_pos = None  # Reset after starting drag
+                event.accept()
+            else:
+                super().mouseMoveEvent(event)
         else:
             super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent):
-        """Handle mouse release events for panning."""
-        if event.button() == Qt.MouseButton.LeftButton and self._is_panning:
-            self._is_panning = False
-            self.setCursor(Qt.CursorShape.ArrowCursor) # Or keep custom cursor if desired
-            event.accept()
+        """Handle mouse release events for panning and drag-to-external."""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start_pos = None  # Clear drag start position
+            if self._is_panning:
+                self._is_panning = False
+                self.setCursor(Qt.CursorShape.ArrowCursor) # Or keep custom cursor if desired
+                event.accept()
+            else:
+                super().mouseReleaseEvent(event)
         else:
             super().mouseReleaseEvent(event)
+
+    def _start_external_drag(self):
+        """Initiate a drag operation to external applications."""
+        # Determine which image path to use
+        current_image_path = self.dropped_image_path or (
+            self.image_gallery.last_selected_image_path if hasattr(self.image_gallery, 'last_selected_image_path') else None
+        )
+        
+        if not current_image_path or not Path(current_image_path).exists():
+            print("DragDropArea: Cannot start external drag - no valid image path")
+            return
+        
+        print(f"DragDropArea: Starting external drag for: {current_image_path}")
+        
+        # Create mime data with the file URL
+        mime_data = QMimeData()
+        file_url = QUrl.fromLocalFile(current_image_path)
+        mime_data.setUrls([file_url])
+        
+        # Create and execute the drag operation
+        drag = QDrag(self)
+        drag.setMimeData(mime_data)
+        
+        # Create a thumbnail for the drag preview
+        if self._full_res_pixmap and not self._full_res_pixmap.isNull():
+            preview_size = 128
+            preview_pixmap = self._full_res_pixmap.scaled(
+                preview_size, preview_size,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            drag.setPixmap(preview_pixmap)
+        
+        # Execute the drag (Copy action is default for file drags)
+        drag.exec(Qt.DropAction.CopyAction)
 
     # --- Drag and Drop ---
     def dragEnterEvent(self, event: QDragEnterEvent):

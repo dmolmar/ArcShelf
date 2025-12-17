@@ -1,6 +1,27 @@
 # utils/path_utils.py
 import os
+import math
 from pathlib import Path
+from typing import Optional
+
+def human_readable_size(size_bytes: Optional[int]) -> str:
+    """Converts size in bytes to human-readable string."""
+    if size_bytes is None or size_bytes < 0:
+        return "N/A"
+    if size_bytes == 0:
+        return "0 B"
+    size_name = ("B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB")
+    try:
+        i = int(math.floor(math.log(size_bytes, 1024)))
+        # Clamp index to the range of size_name
+        i = max(0, min(i, len(size_name) - 1))
+        p = math.pow(1024, i)
+        s = round(size_bytes / p, 2)
+        return f"{s} {size_name[i]}"
+    except (ValueError, OverflowError):
+        # Handle potential math errors for very large numbers
+        return f"{size_bytes} B"
+
 
 def normalize_path(path_str: str) -> str:
     """
