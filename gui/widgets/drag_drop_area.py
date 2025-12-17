@@ -84,32 +84,40 @@ class DragDropArea(QGraphicsView):
 
     # --- set_image, _clear_scene_items, _show_placeholder_text, _center_placeholder ---
     # (These remain unchanged from the previous version)
-    def set_image(self, pixmap: Optional[QPixmap]):
-        """Loads the full-res image, generates LODs, and sets the initial view."""
+    def set_image(self, pixmap: Optional[QPixmap], is_placeholder: bool = False):
+        """Loads the image, optionally generates LODs, and sets the initial view.
+        
+        Args:
+            pixmap: The image to display, or None to show placeholder text.
+            is_placeholder: If True, skip LOD generation for fast display (used for
+                          thumbnail placeholders that will be replaced by full-res).
+        """
         self._clear_scene_items()
         self._full_res_pixmap = None
-        self._lods = [] # Clear previous LODs
+        self._lods = []
 
         if pixmap and not pixmap.isNull():
             self._full_res_pixmap = pixmap
-            print(f"DragDropArea: Loaded full-res image ({self._full_res_pixmap.width()}x{self._full_res_pixmap.height()})")
-
+            
+            # Unified path: Both placeholder and full-res use identical code
+            # Placeholder just skips expensive LOD generation
             self._pixmap_item = QGraphicsPixmapItem()
             self._pixmap_item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
             self._scene.addItem(self._pixmap_item)
-
+            
             self._scene.setSceneRect(QRectF(self._full_res_pixmap.rect()))
-
-            # Generate initial LODs based on current view size (if available)
-            # _regenerate_lods_and_fit will handle subsequent updates on resize
-            if self.viewport() and self.viewport().size().width() > 0:
-                 self._generate_lods()
+            
+            if is_placeholder:
+                # Single LOD = the thumbnail itself (skip LOD generation for speed)
+                self._lods = [(self._full_res_pixmap.width(), self._full_res_pixmap)]
             else:
-                 print("DragDropArea: Viewport not ready, delaying initial LOD generation.")
-                 self._lods = [(self._full_res_pixmap.width(), self._full_res_pixmap)]
-
-            # Fit the view and select initial LOD
-            self.fit_image_in_view() # Calls _update_display_pixmap_and_item_scale
+                # Generate multiple LODs for full-res
+                if self.viewport() and self.viewport().size().width() > 0:
+                    self._generate_lods()
+                else:
+                    self._lods = [(self._full_res_pixmap.width(), self._full_res_pixmap)]
+            
+            self.fit_image_in_view()
 
         else:
             self._show_placeholder_text()

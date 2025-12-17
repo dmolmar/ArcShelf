@@ -840,65 +840,66 @@ class ImageGallery(QMainWindow):
         self.perform_search()
 
     # --- Image Interaction & Info Display ---
-    def handle_image_click(self, img_path: str, analyze: bool = False):
-
+    def handle_image_click(self, img_path: str, analyze: bool = False, thumbnail_pixmap: Optional[QPixmap] = None):
+        """Handles click on an image in the gallery."""
         self.last_selected_image_path = img_path
-        self.display_image_in_preview(img_path)
+        
+        # Show "Loading..." immediately in the info text box
+        self.info_text.setHtml("<i>Loading...</i>")
+        
+        self.display_image_in_preview(img_path, thumbnail_pixmap=thumbnail_pixmap)
         self.process_image_info(img_path, analyze=analyze)
 
     @pyqtSlot(str)
-    def display_image_in_preview(self, img_path: str, target_label: Optional[QWidget] = None): # target_label optional now
-        """Loads the image in a worker and sets it in the DragDropArea."""
-        # If a target_label is passed AND it's our DragDropArea, use it. Otherwise, use self.drag_drop_area.
-        # This maintains compatibility if the method was called elsewhere, but primarily targets self.drag_drop_area.
+    def display_image_in_preview(self, img_path: str, target_label: Optional[QWidget] = None, thumbnail_pixmap: Optional[QPixmap] = None):
+        """Loads the image in a worker and sets it in the DragDropArea.
+        
+        Two-stage loading for instant feedback:
+        1. Display provided thumbnail immediately (if available)
+        2. Load full-res in background and replace when ready
+        """
         target_view = self.drag_drop_area if target_label is None or target_label == self.drag_drop_area else None
 
         if not target_view:
-             print("ImageGallery: display_image_in_preview - Invalid target.")
-             return
+            return
 
+        # --- STAGE 1: Display thumbnail immediately for instant feedback ---
+        if thumbnail_pixmap and not thumbnail_pixmap.isNull():
+            # Fix devicePixelRatio to prevent scaling issues on high-DPI displays
+            thumbnail_pixmap.setDevicePixelRatio(1.0)
+            target_view.set_image(thumbnail_pixmap, is_placeholder=True)
+            # Force immediate repaint so thumbnail is visible before any other processing
+            target_view.repaint()
+            QApplication.processEvents()
 
-        # Optionally show "Loading..." text (though set_image handles placeholder)
-        # target_view.set_image(None) # Clear previous and show placeholder
-
+        # --- STAGE 2: Load full-res in background worker ---
         def load_and_display_task():
             try:
-                # Load using QPixmap for direct use in QGraphicsView
                 pixmap = QPixmap(img_path)
-                # Return the pixmap (or None if loading failed)
                 return pixmap
             except Exception as e:
                 print(f"Error loading image for preview {img_path}: {e}")
-                return None # Return None on error
+                return None
 
         def handle_load_result(pixmap_result: Optional[QPixmap]):
             load_successful = pixmap_result and not pixmap_result.isNull()
-            if target_view: # Check if target_view is still valid
+            if target_view:
                 if load_successful:
                     target_view.set_image(pixmap_result)
                 else:
                     print(f"ImageGallery: Could not load image: {img_path}")
-                    target_view.set_image(None) # Show placeholder on failure
-            else:
-                 print("ImageGallery: Target view no longer valid after image load.")
-
-            # --- Slideshow Timer Logic ---
+                    target_view.set_image(None)
+            
+            # Slideshow Timer Logic
             if self.is_slideshow_active:
                 if load_successful:
                     delay_ms = (self.slideshow_delay_spinbox.value() * 1000) if self.slideshow_delay_spinbox else 5000
-                    print(f"  Slideshow: Image loaded, starting timer for {delay_ms}ms")
                     self.slideshow_timer.start(int(delay_ms))
                 else:
-                    # Image failed to load, advance quickly
-                    print(f"  Slideshow: Image failed to load, advancing quickly.")
-                    QTimer.singleShot(100, self.advance_slideshow) # Advance after 100ms
-            # --- End Slideshow Timer Logic ---
+                    QTimer.singleShot(100, self.advance_slideshow)
 
         worker = Worker(load_and_display_task)
-        # Connect the worker's finished signal to handle the result
         worker.signals.finished.connect(handle_load_result)
-        # Optionally connect error signal for more specific error handling
-        # worker.signals.error.connect(...)
         self.threadpool.start(worker)
 
     def process_image_info(self, img_path: str, analyze: bool, store_temp_predictions_callback: Optional[Callable] = None):

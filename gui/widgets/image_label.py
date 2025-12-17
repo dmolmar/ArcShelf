@@ -69,7 +69,9 @@ class ImageLabel(QLabel):
         if event.button() == Qt.MouseButton.LeftButton and self._drag_start_pos is not None:
             # No drag occurred (we would have reset _drag_start_pos), so trigger click
             self._drag_start_pos = None
-            self.on_click_callback(self.image_path, analyze=False)
+            # Pass the thumbnail pixmap directly for instant preview display
+            thumbnail_pixmap = self.pixmap()
+            self.on_click_callback(self.image_path, analyze=False, thumbnail_pixmap=thumbnail_pixmap)
         super().mouseReleaseEvent(event)
 
     def _start_external_drag(self):
