@@ -109,6 +109,7 @@ class ImageGallery(QMainWindow):
         self.slideshow_timer.setSingleShot(True)
         self.slideshow_button: Optional[QPushButton] = None
         self.slideshow_delay_spinbox: Optional[QDoubleSpinBox] = None # Changed type hint
+        self.model_toggle_button: Optional[QPushButton] = None  # Button to load/unload tagging model
 
         # --- Initialization ---
         self.threadpool = QThreadPool()
@@ -132,6 +133,8 @@ class ImageGallery(QMainWindow):
         # Model Initialization
         self.model = ImageTaggerModel(config.MODEL_PATH, config.TAGS_CSV_PATH)
         self.model.model_load_error_signal.connect(self._handle_model_load_error)
+        self.model.model_loaded_signal.connect(self._update_model_button_appearance)
+        self.model.model_unloaded_signal.connect(self._update_model_button_appearance)
 
         # --- UI Setup ---
         self.setup_ui()
@@ -316,7 +319,13 @@ class ImageGallery(QMainWindow):
         self.slideshow_delay_spinbox.setSingleStep(0.5) # Step by 0.5s
         self.slideshow_delay_spinbox.setValue(5.0)      # Default 5.0 seconds
         self.slideshow_delay_spinbox.setFixedWidth(75) # Slightly wider for decimals
+        # Model toggle button
+        self.model_toggle_button = QPushButton("Model: Unloaded")
+        self.model_toggle_button.setStyleSheet("color: red;")
+        self.model_toggle_button.setToolTip("Click to load/unload the tagging model. Unloading saves memory.")
+        
         slideshow_layout.addStretch(1) # Push controls to the right
+        slideshow_layout.addWidget(self.model_toggle_button)
         slideshow_layout.addWidget(self.slideshow_button)
         slideshow_layout.addWidget(self.slideshow_delay_label)
         slideshow_layout.addWidget(self.slideshow_delay_spinbox)
@@ -413,6 +422,10 @@ class ImageGallery(QMainWindow):
         if self.slideshow_button: # Check if UI elements were created
             self.slideshow_button.clicked.connect(self.toggle_slideshow)
         self.slideshow_timer.timeout.connect(self.advance_slideshow)
+
+        # --- Model Toggle Signal ---
+        if self.model_toggle_button:
+            self.model_toggle_button.clicked.connect(self.toggle_model)
 
         # Stop slideshow if underlying data changes significantly
         self.advanced_search_panel.searchRequested.connect(self.stop_slideshow)
@@ -2099,6 +2112,41 @@ class ImageGallery(QMainWindow):
 
     def unload_model_safely(self):
         print("Unloading model..."); self.model.unload_model(); print("Model unloaded.")
+
+    @pyqtSlot()
+    def toggle_model(self):
+        """Toggles the tagging model between loaded and unloaded states."""
+        # Visual feedback for potentially long operation
+        self.model_toggle_button.setStyleSheet("color: darkblue; font-weight: bold;")
+        
+        if self.model.tagger is not None:
+            # Model is loaded, unload it
+            self.model_toggle_button.setText("Model: Unloading...")
+            QApplication.processEvents() # Force UI update
+            print("Toggle: Unloading model...")
+            self.model.unload_model()
+        else:
+            # Model is not loaded, load it
+            self.model_toggle_button.setText("Model: Loading...")
+            QApplication.processEvents() # Force UI update
+            print("Toggle: Loading model...")
+            success = self.model.load_model()
+            if not success:
+                QMessageBox.warning(self, "Model Load Failed",
+                    "Failed to load the tagging model.\n\n"
+                    "Please check the 'Check Requirements' dialog for details.")
+
+    @pyqtSlot()
+    def _update_model_button_appearance(self):
+        """Updates the model toggle button text and color based on model state."""
+        if not self.model_toggle_button:
+            return
+        if self.model.tagger is not None:
+            self.model_toggle_button.setText("Model: Loaded")
+            self.model_toggle_button.setStyleSheet("color: green;")
+        else:
+            self.model_toggle_button.setText("Model: Unloaded")
+            self.model_toggle_button.setStyleSheet("color: red;")
 
     def set_ui_enabled(self, enabled: bool, during_slideshow: bool = False):
         """

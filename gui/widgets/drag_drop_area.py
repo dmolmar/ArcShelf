@@ -58,6 +58,7 @@ class DragDropArea(QGraphicsView):
         self._is_panning: bool = False
         self._last_pan_point: QPointF = QPointF()
         self._drag_start_pos: Optional[QPointF] = None  # For drag-to-external detection
+        self._is_self_dragging: bool = False  # Flag to prevent dropping onto ourselves
         self._current_view_scale: float = 1.0
         self._fit_scale_full_res: float = 1.0
 
@@ -547,11 +548,23 @@ class DragDropArea(QGraphicsView):
             )
             drag.setPixmap(preview_pixmap)
         
+        # Set flag to prevent dropping onto ourselves
+        self._is_self_dragging = True
+        
         # Execute the drag (Copy action is default for file drags)
-        drag.exec(Qt.DropAction.CopyAction)
+        try:
+            drag.exec(Qt.DropAction.CopyAction)
+        finally:
+            # Always clear the flag when drag completes
+            self._is_self_dragging = False
 
     # --- Drag and Drop ---
     def dragEnterEvent(self, event: QDragEnterEvent):
+        # Reject self-drops (dragging from this widget onto itself)
+        if self._is_self_dragging:
+            event.ignore()
+            return
+        
         mime_data = event.mimeData()
         # print(f"[DEBUG] DragEnter: Mime types: {mime_data.formats()}")
 
@@ -591,6 +604,11 @@ class DragDropArea(QGraphicsView):
 
     def dragMoveEvent(self, event: QDragMoveEvent):
         """Handles drag move events to continuously accept valid image drags."""
+        # Reject self-drops (dragging from this widget onto itself)
+        if self._is_self_dragging:
+            event.ignore()
+            return
+        
         # Re-use logic from dragEnterEvent implicitly by accepting if accepted in enter
         # But we should re-check to be safe and consistent
         mime_data = event.mimeData()
@@ -616,6 +634,12 @@ class DragDropArea(QGraphicsView):
 
     def dropEvent(self, event: QDropEvent):
         self.setStyleSheet("") # Reset style
+        
+        # Reject self-drops (dragging from this widget onto itself)
+        if self._is_self_dragging:
+            event.ignore()
+            return
+        
         mime_data = event.mimeData()
         
         # 1. Check for Local Files (Priority 1)

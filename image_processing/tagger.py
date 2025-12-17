@@ -18,6 +18,9 @@ class ImageTaggerModel(QObject):
     """
     # Add a signal to notify the GUI about load errors
     model_load_error_signal = pyqtSignal(str)
+    # Add signals for state changes
+    model_loaded_signal = pyqtSignal()
+    model_unloaded_signal = pyqtSignal()
 
     def __init__(self, model_path: Path = config.MODEL_PATH, csv_path: Path = config.TAGS_CSV_PATH, use_gpu: bool = True):
         """
@@ -64,6 +67,7 @@ class ImageTaggerModel(QObject):
                 if self.tagger.model is None:
                      raise RuntimeError("WaifuTagger initialization succeeded, but internal ONNX model is still None.")
                 print("WaifuTagger model loaded successfully.")
+                self.model_loaded_signal.emit() # Notify listeners
                 return True # Success
             except Exception as e:
                 error_message = f"Error loading WaifuTagger model: {e}"
@@ -92,7 +96,9 @@ class ImageTaggerModel(QObject):
                  # Reset load state flags when explicitly unloading
                  self._load_attempted = False
                  self._load_failed = False
+                 self._load_failed = False
                  print("WaifuTagger model unloaded.")
+                 self.model_unloaded_signal.emit() # Notify listeners
 
     def determine_rating(self, predictions: List[TagPrediction]) -> str:
         """
