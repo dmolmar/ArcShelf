@@ -4,3 +4,6 @@ numpy>=1.20.0,<2.0.0
 pandas>=1.0.0,<3.0.0
 onnxruntime-gpu==1.22.0
 requests>=2.20.0,<3.0.0
+matplotlib>=3.5.0,<4.0.0
+datasketch>=1.6.0,<2.0.0
+send2trash>=1.8.0,<2.0.0

@@ -142,6 +142,9 @@ class ImageGallery(QMainWindow):
         # --- Signal Connections ---
         self.setup_signals()
 
+        # Set default search query
+        self.advanced_search_panel.set_query_text("general")
+
         # --- Initial Load ---
         self.perform_search() # Perform initial search/load
         self.update_suggestions() # Initial tag suggestions
@@ -282,6 +285,7 @@ class ImageGallery(QMainWindow):
         self.sorting_layout.setContentsMargins(0,0,0,0)
         self.sorting_combo = QComboBox()
         self.sorting_combo.addItems(['Date', 'File Size', 'Resolution', 'Aspect Ratio', 'Random', 'Similarity'])
+        self.sorting_combo.setCurrentText("Random")
         self.sorting_combo.model().item(self.sorting_combo.count() - 1).setEnabled(False)
         self.sort_order_combo = QComboBox()
         self.sort_order_combo.addItems(['↓ Desc', '↑ Asc'])
@@ -324,7 +328,12 @@ class ImageGallery(QMainWindow):
         self.model_toggle_button.setStyleSheet("color: red;")
         self.model_toggle_button.setToolTip("Click to load/unload the tagging model. Unloading saves memory.")
         
+        # Statistics button
+        self.statistics_button = QPushButton("📊 Statistics")
+        self.statistics_button.setToolTip("View statistics for current search results")
+        
         slideshow_layout.addStretch(1) # Push controls to the right
+        slideshow_layout.addWidget(self.statistics_button)
         slideshow_layout.addWidget(self.model_toggle_button)
         slideshow_layout.addWidget(self.slideshow_button)
         slideshow_layout.addWidget(self.slideshow_delay_label)
@@ -426,6 +435,10 @@ class ImageGallery(QMainWindow):
         # --- Model Toggle Signal ---
         if self.model_toggle_button:
             self.model_toggle_button.clicked.connect(self.toggle_model)
+        
+        # --- Statistics Dialog Signal ---
+        if self.statistics_button:
+            self.statistics_button.clicked.connect(self.open_statistics_dialog)
 
         # Stop slideshow if underlying data changes significantly
         self.advanced_search_panel.searchRequested.connect(self.stop_slideshow)
@@ -544,6 +557,12 @@ class ImageGallery(QMainWindow):
         dialog = RequirementsDialog(self)
         # The main window no longer needs to track the status directly, so the connection below is removed.
         # dialog.requirementsMetStatus.connect(self._update_requirements_status)
+        dialog.exec()
+
+    def open_statistics_dialog(self):
+        """Opens the statistics dialog for current search results."""
+        from .dialogs.statistics_dialog import StatisticsDialog
+        dialog = StatisticsDialog(self, self.db, self.all_images, self.thumbnail_cache)
         dialog.exec()
 
     # Removed _update_requirements_status slot

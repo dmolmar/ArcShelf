@@ -11,11 +11,11 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QSplitter, QWidget, QListWidget,
     QPushButton, QLineEdit, QCheckBox, QSpinBox, QFileDialog, QMessageBox,
-    QListWidgetItem, QAbstractItemView, QLabel, QApplication, # Removed QSizePolicy
-    QFrame # Import QFrame
+    QListWidgetItem, QAbstractItemView, QLabel, QApplication,
+    QFrame, QMenu
 )
-from PyQt6.QtCore import Qt, QTimer, QThreadPool, QSize, pyqtSignal
-from PyQt6.QtGui import QIcon, QPixmap, QImage
+from PyQt6.QtCore import Qt, QTimer, QThreadPool, QSize, pyqtSignal, QUrl
+from PyQt6.QtGui import QIcon, QPixmap, QImage, QAction, QDesktopServices
 from PIL import Image, UnidentifiedImageError
 
 # Local imports (within the gui package)
@@ -29,6 +29,7 @@ import config
 
 # Import the normalization and utility functions
 from utils.path_utils import normalize_path, human_readable_size
+from utils.minhash_utils import compute_minhash_signature, estimate_jaccard_fast
 
 # Use TYPE_CHECKING for type hints to avoid circular imports
 if TYPE_CHECKING:
@@ -176,8 +177,12 @@ class ManageDirectoriesDialog(QDialog):
         # Image/Duplicate List
         self.image_list = QListWidget()
         self.image_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.image_list.setWordWrap(True) # Keep word wrap for potentially long info
-        self.right_layout.addWidget(self.image_list) # Label removed
+        self.image_list.setWordWrap(True)
+        self.image_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.image_list.customContextMenuRequested.connect(self._show_dupe_context_menu)
+        # Auto-load more when scrolling to bottom
+        self.image_list.verticalScrollBar().valueChanged.connect(self._on_image_list_scroll)
+        self.right_layout.addWidget(self.image_list)
 
         # Image Selection Buttons
         img_buttons_layout = QHBoxLayout()
@@ -195,25 +200,58 @@ class ManageDirectoriesDialog(QDialog):
         line3.setFrameShadow(QFrame.Shadow.Sunken)
         self.right_layout.addWidget(line3)
 
-        # Duplicate Detection Section
-        dupe_layout_h = QHBoxLayout()
-        self.similarity_threshold_label = QLabel("Similarity Threshold (%):") # Adjusted text
-        self.similarity_threshold_spinbox = QSpinBox()
-        self.similarity_threshold_spinbox.setRange(50, 100)
-        self.similarity_threshold_spinbox.setValue(95)
-        self.detect_dupes_button = QPushButton("Detect Dupes") # Renamed
+        # Duplicate Detection Section - Row 1: Thresholds
+        dupe_row1 = QHBoxLayout()
+        self._threshold_offset = 15  # Remember user's preferred offset (default 15%)
+        
+        # Catch Threshold (LSH)
+        self.catch_threshold_label = QLabel("Catch:")
+        self.catch_threshold_spinbox = QSpinBox()
+        self.catch_threshold_spinbox.setRange(50, 97)
+        self.catch_threshold_spinbox.setValue(75)
+        self.catch_threshold_spinbox.setSuffix("%")
+        self.catch_threshold_spinbox.valueChanged.connect(self._on_catch_threshold_changed)
+        
+        # Display Threshold
+        self.display_threshold_label = QLabel("Display:")
+        self.display_threshold_label.setToolTip(
+            "Only show pairs with similarity at or above this value.\n"
+            "When linked, auto-set to Catch + offset."
+        )
+        self.display_threshold_spinbox = QSpinBox()
+        self.display_threshold_spinbox.setRange(50, 100)
+        self.display_threshold_spinbox.setValue(90)
+        self.display_threshold_spinbox.setSuffix("%")
+        self.display_threshold_spinbox.setToolTip(self.display_threshold_label.toolTip())
+        self.display_threshold_spinbox.valueChanged.connect(self._on_display_threshold_changed)
+        
+        # Link Checkbox
+        self.link_thresholds_checkbox = QCheckBox("Link")
+        self.link_thresholds_checkbox.setChecked(True)
+        self.link_thresholds_checkbox.setToolTip("When checked, Display = Catch + offset")
+        self.link_thresholds_checkbox.stateChanged.connect(self._on_link_thresholds_changed)
+        self._update_display_threshold_from_catch()  # Set initial linked value
+        self._update_catch_tooltip()  # Set initial tooltip (after display spinbox exists)
+        
+        # Detect Button
+        self.detect_dupes_button = QPushButton("Detect Dupes")
         self.detect_dupes_button.clicked.connect(self.detect_dupes_action)
-        # Order: Label, Spinbox, Button
-        dupe_layout_h.addWidget(self.similarity_threshold_label)
-        dupe_layout_h.addWidget(self.similarity_threshold_spinbox)
-        dupe_layout_h.addStretch(1) # Push button to the right
-        dupe_layout_h.addWidget(self.detect_dupes_button)
-        self.right_layout.addLayout(dupe_layout_h)
+        
+        dupe_row1.addWidget(self.catch_threshold_label)
+        dupe_row1.addWidget(self.catch_threshold_spinbox)
+        dupe_row1.addSpacing(10)
+        dupe_row1.addWidget(self.display_threshold_label)
+        dupe_row1.addWidget(self.display_threshold_spinbox)
+        dupe_row1.addWidget(self.link_thresholds_checkbox)
+        dupe_row1.addStretch(1)
+        dupe_row1.addWidget(self.detect_dupes_button)
+        self.right_layout.addLayout(dupe_row1)
 
         # Separator Line
         line4 = QFrame()
         line4.setFrameShape(QFrame.Shape.HLine)
         line4.setFrameShadow(QFrame.Shadow.Sunken)
+
         self.right_layout.addWidget(line4)
 
         # Reprocess Section (for selected images)
@@ -508,23 +546,105 @@ class ManageDirectoriesDialog(QDialog):
         self.reprocessImagesRequested.emit(image_ids_to_reprocess, properties_to_reprocess)
         QMessageBox.information(self, "Reprocessing Started", f"Reprocessing started for {len(image_ids_to_reprocess)} selected images.")
 
+    # --- Threshold Linking Helpers ---
+    def _on_catch_threshold_changed(self, value: int):
+        """Called when catch threshold changes - updates display if linked, updates tooltip."""
+        self._update_catch_tooltip()
+        if self.link_thresholds_checkbox.isChecked():
+            # Update display based on current offset
+            display_val = max(50, min(value + self._threshold_offset, 100))
+            self.display_threshold_spinbox.blockSignals(True)
+            self.display_threshold_spinbox.setValue(display_val)
+            self.display_threshold_spinbox.blockSignals(False)
+
+    def _on_display_threshold_changed(self, value: int):
+        """Called when display threshold changes - updates catch if linked, or remembers offset."""
+        if self.link_thresholds_checkbox.isChecked():
+            # Linked: update catch to maintain the offset
+            new_catch = max(50, min(value - self._threshold_offset, 97))
+            self.catch_threshold_spinbox.blockSignals(True)
+            self.catch_threshold_spinbox.setValue(new_catch)
+            self.catch_threshold_spinbox.blockSignals(False)
+        else:
+            # Not linked: remember the new offset for when user re-links
+            catch_val = self.catch_threshold_spinbox.value()
+            self._threshold_offset = value - catch_val
+        
+        self._update_catch_tooltip()
+
+    def _on_link_thresholds_changed(self, state: int):
+        """Called when link checkbox changes."""
+        # Both spinboxes always remain enabled - linking just syncs them
+        if state == Qt.CheckState.Checked.value:
+            # When linking, ensure offset is current
+            catch_val = self.catch_threshold_spinbox.value()
+            display_val = self.display_threshold_spinbox.value()
+            self._threshold_offset = display_val - catch_val
+
+    def _update_display_threshold_from_catch(self):
+        """Sets display threshold to catch + offset, capped at 50-100."""
+        catch_val = self.catch_threshold_spinbox.value()
+        display_val = max(50, min(catch_val + self._threshold_offset, 100))
+        self.display_threshold_spinbox.setValue(display_val)
+
+    def _update_catch_tooltip(self):
+        """Updates tooltip with dynamic probability estimates based on catch and display thresholds."""
+        catch = self.catch_threshold_spinbox.value()
+        display = self.display_threshold_spinbox.value()
+        
+        # Estimate detection probabilities using a more accurate LSH model
+        def estimate_prob(similarity: int, threshold: int) -> float:
+            """Probability estimate - returns percentage with decimals."""
+            diff = similarity - threshold
+            if diff >= 25: return 99.99
+            elif diff >= 20: return 99.9
+            elif diff >= 15: return 99.0
+            elif diff >= 10: return 95.0
+            elif diff >= 5: return 85.0
+            elif diff >= 0: return 50.0
+            elif diff >= -5: return 25.0
+            elif diff >= -10: return 10.0
+            else: return 2.0
+        
+        # Show probabilities relevant to the display threshold
+        # Start from display and go down in steps
+        p_display = estimate_prob(display, catch)
+        p_mid1 = estimate_prob(display - 5, catch) if display > 55 else None
+        p_mid2 = estimate_prob(display - 10, catch) if display > 60 else None
+        p_catch = estimate_prob(catch, catch)
+        
+        lines = [
+            f"How aggressively to search for duplicates.",
+            f"Lower = catches more edge cases, slightly slower.",
+            f"",
+            f"Detection rates at Catch={catch}%:"
+        ]
+        
+        lines.append(f"• {display}% similar (Display): ~{p_display:.1f}% caught")
+        if p_mid1 is not None and display - 5 > catch:
+            lines.append(f"• {display-5}% similar: ~{p_mid1:.1f}% caught")
+        if p_mid2 is not None and display - 10 > catch:
+            lines.append(f"• {display-10}% similar: ~{p_mid2:.1f}% caught")
+        lines.append(f"• {catch}% (Catch threshold): ~{p_catch:.1f}% caught")
+        
+        tooltip = "\n".join(lines)
+        self.catch_threshold_label.setToolTip(tooltip)
+        self.catch_threshold_spinbox.setToolTip(tooltip)
 
     # --- Duplicate Detection ---
-    # (Keep detect_dupes_action, compare_image_tags, on_detection_finished,
-    #  on_detection_error, add_dupe_pair_to_gui, populate_dupe_section,
-    #  get_cached_thumbnail as they are, unless specific bugs are found)
-    # ---
     def detect_dupes_action(self):
         """Starts the duplicate detection process."""
         print("detect_dupes_action: Starting duplicate detection")
-        self.image_list.clear() # Clear the right panel for results
+        self.image_list.clear()
         self.image_list.addItem("Starting duplicate detection...")
 
         self.set_ui_enabled(False)
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
 
-        similarity_threshold = self.similarity_threshold_spinbox.value() / 100.0
-        print(f"detect_dupes_action: Similarity threshold: {similarity_threshold}")
+        # Get both thresholds
+        catch_threshold = self.catch_threshold_spinbox.value() / 100.0
+        display_threshold = self.display_threshold_spinbox.value() / 100.0
+        print(f"detect_dupes_action: Catch threshold: {catch_threshold}, Display threshold: {display_threshold}")
 
         dirs_to_search = list(self.active_directories) # Use active directories
         if not dirs_to_search:
@@ -564,12 +684,13 @@ class ManageDirectoriesDialog(QDialog):
             self.image_list.addItem("Need at least two images to compare.")
             return
 
-        worker = Worker(self.compare_image_tags, image_paths=image_paths_in_scope, similarity_threshold=similarity_threshold, status_callback=self.updateStatusText.emit)
+        worker = Worker(self.compare_image_tags, 
+                       image_paths=image_paths_in_scope, 
+                       catch_threshold=catch_threshold,
+                       display_threshold=display_threshold,
+                       status_callback=self.updateStatusText.emit)
         worker.signals.finished.connect(self.on_detection_finished)
         worker.signals.error.connect(self.on_detection_error)
-        # Connect progress signal if compare_image_tags provides it
-        # worker.signals.progress.connect(self.update_progress_display)
-        # worker.signals.update_info_text.connect(self.updateStatusText.emit) # Already passed as kwarg
 
         self.threadpool.start(worker)
         print("detect_dupes_action: Comparison worker started.")
@@ -577,76 +698,132 @@ class ManageDirectoriesDialog(QDialog):
         self.image_list.addItem("Duplicate detection running in background...")
 
 
-    def compare_image_tags(self, image_paths: List[str], similarity_threshold: float, status_callback: Optional[Callable[[str], None]] = None) -> List[Tuple[str, str, float]]:
+    def compare_image_tags(self, image_paths: List[str], catch_threshold: float, display_threshold: float, status_callback: Optional[Callable[[str], None]] = None) -> List[Tuple[str, str, float]]:
         """
-        Compares images based on Jaccard similarity of their tags.
-        (Keep implementation as is)
+        Compares images based on Jaccard similarity using MinHash + LSH.
+        LSH (Locality Sensitive Hashing) avoids O(n²) comparisons by only comparing
+        items that hash to the same bucket.
+        
+        Args:
+            catch_threshold: Threshold for LSH bucketing (lower catches more)
+            display_threshold: Threshold for filtering results (only show >= this)
         """
-        print(f"compare_image_tags: Starting comparison for {len(image_paths)} images, threshold {similarity_threshold}")
+        from datasketch import MinHash, MinHashLSH
+        from utils.minhash_utils import NUM_PERMUTATIONS
+        import struct
+        
+        print(f"compare_image_tags: MinHash+LSH for {len(image_paths)} images, catch={catch_threshold}, display={display_threshold}")
         if len(image_paths) < 2: return []
 
-        image_tags_map: Dict[str, Set[str]] = {} # path -> set(tags)
-        try:
-            with self.db.lock, sqlite3.connect(self.db.db_path) as conn:
-                cursor = conn.cursor()
-                chunk_size = 500 # Process paths in chunks if list is very large
-                all_rows = []
-                for i in range(0, len(image_paths), chunk_size):
-                     chunk = image_paths[i:i+chunk_size]
-                     path_placeholders = ','.join('?' for _ in chunk)
-                     cursor.execute(f"""
-                         SELECT i.path, t.name
-                         FROM images i
-                         JOIN image_tags it ON i.id = it.image_id
-                         JOIN tags t ON it.tag_id = t.id
-                         WHERE i.path IN ({path_placeholders})
-                     """, chunk)
-                     all_rows.extend(cursor.fetchall())
-
-                for path, tag_name in all_rows:
-                    if path not in image_tags_map: image_tags_map[path] = set()
-                    image_tags_map[path].add(tag_name)
-            print(f"compare_image_tags: Fetched tags for {len(image_tags_map)} images.")
-        except sqlite3.Error as e:
-            print(f"Database error fetching tags for comparison: {e}")
-            if status_callback: status_callback(f"Error fetching tags: {e}")
+        # Step 1: Fetch existing MinHash signatures
+        if status_callback: status_callback(f"Fetching MinHash signatures for {len(image_paths)} images...\n")
+        signatures = self.db.get_minhash_signatures_for_paths(image_paths)
+        
+        # Step 2: Identify images missing signatures and compute them
+        paths_needing_signatures = [p for p in image_paths if signatures.get(p) is None]
+        if paths_needing_signatures:
+            if status_callback: status_callback(f"Computing signatures for {len(paths_needing_signatures)} images...\n")
+            print(f"compare_image_tags: Computing signatures for {len(paths_needing_signatures)} images...")
+            
+            for idx, path in enumerate(paths_needing_signatures):
+                tags = self.db.get_tags_for_path(path)
+                if tags:
+                    sig = compute_minhash_signature(tags)
+                    signatures[path] = sig
+                    self.db.update_minhash_signature(path, sig)
+                
+                if status_callback and (idx + 1) % 100 == 0:
+                    status_callback(f"Computing signatures: {idx + 1}/{len(paths_needing_signatures)}...\n")
+        
+        # Step 3: Build LSH index for fast candidate retrieval
+        valid_paths = [p for p in image_paths if signatures.get(p)]
+        n = len(valid_paths)
+        
+        if n < 2:
+            if status_callback: status_callback("Not enough images with valid signatures to compare.\n")
             return []
-
+        
+        if status_callback: status_callback(f"Building LSH index for {n} images...\n")
+        print(f"compare_image_tags: Building LSH index for {n} images...")
+        
+        # Create LSH index - cap threshold at 0.97 because very high thresholds cause LSH errors
+        # (LSH needs at least 2 bands, which isn't possible at extremely high thresholds)
+        lsh_threshold = min(catch_threshold, 0.97)
+        if lsh_threshold < catch_threshold:
+            if status_callback: status_callback(f"Note: Using LSH threshold 0.97 (will filter to {catch_threshold:.0%} after)\n")
+        
+        try:
+            lsh = MinHashLSH(threshold=lsh_threshold, num_perm=NUM_PERMUTATIONS)
+        except ValueError as e:
+            # Fallback: if LSH still fails, use 0.90 threshold for more candidates
+            print(f"LSH init failed: {e}, falling back to 0.90 threshold")
+            if status_callback: status_callback(f"LSH threshold adjusted for compatibility...\n")
+            lsh = MinHashLSH(threshold=0.90, num_perm=NUM_PERMUTATIONS)
+        
+        # Convert byte signatures back to MinHash objects and insert into LSH
+        import numpy as np
+        path_to_minhash: Dict[str, MinHash] = {}
+        for path in valid_paths:
+            sig_bytes = signatures[path]
+            if sig_bytes and len(sig_bytes) == NUM_PERMUTATIONS * 4:
+                mh = MinHash(num_perm=NUM_PERMUTATIONS)
+                # Must use numpy array, not list - datasketch requires it
+                mh.hashvalues = np.array(struct.unpack(f'{NUM_PERMUTATIONS}I', sig_bytes), dtype=np.uint64)
+                path_to_minhash[path] = mh
+                lsh.insert(path, mh)
+        
+        # Step 4: Query LSH for candidate pairs (MUCH faster than O(n²))
+        if status_callback: status_callback(f"Finding similar pairs using LSH...\n")
+        print(f"compare_image_tags: Querying LSH for candidates...")
+        
+        seen_pairs = set()  # To avoid duplicate pairs
         comparison_results: List[Tuple[str, str, float]] = []
-        path_list = list(image_tags_map.keys())
-        n = len(path_list)
-        total_comparisons = n * (n - 1) // 2
-        completed_comparisons = 0
-        last_status_update_time = datetime.datetime.now().timestamp()
-        update_interval_seconds = 1.0
-
-        print(f"compare_image_tags: Starting {total_comparisons} pairwise comparisons...\n")
-        if status_callback: status_callback(f"Comparing {n} images ({total_comparisons:,} pairs)...\n")
-
-        for i in range(n):
-            path1 = path_list[i]; tags1 = image_tags_map[path1]
-            if not tags1: continue
-            for j in range(i + 1, n):
-                path2 = path_list[j]; tags2 = image_tags_map.get(path2)
-                if not tags2: continue
-                intersection = len(tags1.intersection(tags2)); union = len(tags1.union(tags2))
-                similarity = intersection / union if union > 0 else 0.0
-                if similarity >= similarity_threshold: comparison_results.append((path1, path2, similarity))
-                completed_comparisons += 1
-                current_time = datetime.datetime.now().timestamp()
-                if status_callback and (current_time - last_status_update_time >= update_interval_seconds or completed_comparisons == total_comparisons):
-                    progress_percentage = (completed_comparisons / total_comparisons) * 100 if total_comparisons > 0 else 100
-                    status_callback(f"Comparing: {completed_comparisons:,}/{total_comparisons:,} pairs ({progress_percentage:.1f}%)\n")
-                    last_status_update_time = current_time
-
+        candidates_checked = 0
+        
+        for idx, path1 in enumerate(valid_paths):
+            mh1 = path_to_minhash.get(path1)
+            if not mh1:
+                continue
+            
+            # Query LSH for similar items (returns only likely matches!)
+            candidates = lsh.query(mh1)
+            
+            for path2 in candidates:
+                if path1 == path2:
+                    continue
+                
+                # Create normalized pair key to avoid duplicates
+                pair_key = tuple(sorted([path1, path2]))
+                if pair_key in seen_pairs:
+                    continue
+                seen_pairs.add(pair_key)
+                
+                mh2 = path_to_minhash.get(path2)
+                if not mh2:
+                    continue
+                
+                # Compute exact MinHash Jaccard for candidates
+                similarity = mh1.jaccard(mh2)
+                candidates_checked += 1
+                
+                if similarity >= display_threshold:
+                    comparison_results.append((path1, path2, similarity))
+            
+            # Progress update every 500 images
+            if status_callback and (idx + 1) % 500 == 0:
+                status_callback(f"Processed {idx + 1}/{n} images, found {len(comparison_results)} pairs...\n")
+        
+        if status_callback: 
+            status_callback(f"LSH checked {candidates_checked:,} candidate pairs (vs {n*(n-1)//2:,} brute force)\n")
+        
         comparison_results.sort(key=lambda x: x[2], reverse=True)
-        print(f"compare_image_tags: Found {len(comparison_results)} pairs above threshold.")
-        if status_callback: status_callback(f"Comparison complete. Found {len(comparison_results)} potential duplicate pairs.\n")
+        print(f"compare_image_tags: Found {len(comparison_results)} pairs above threshold (checked {candidates_checked:,} candidates)")
+        if status_callback: status_callback(f"Complete! Found {len(comparison_results)} duplicate pairs.\n")
         return comparison_results
 
 
     def on_detection_finished(self, comparison_results: List[Tuple[str, str, float]]):
-        """Handles the results from the duplicate detection worker."""
+        """Handles the results from the duplicate detection worker with pagination."""
         print(f"on_detection_finished: Received {len(comparison_results)} pairs.")
         self.set_ui_enabled(True)
         QApplication.restoreOverrideCursor()
@@ -657,10 +834,44 @@ class ManageDirectoriesDialog(QDialog):
             self.updateStatusText.emit("Duplicate detection complete: No pairs found.\n")
             return
 
-        self.updateStatusText.emit(f"Duplicate detection complete: Found {len(comparison_results)} pairs. Populating list...\n")
-        for pair_data in comparison_results: self.add_dupe_pair_to_gui(pair_data)
-        self.updateStatusText.emit(f"Duplicate detection complete: Displaying {len(comparison_results)} pairs.\n")
+        # Store results for pagination
+        self._dupe_results = comparison_results
+        self._dupe_page = 0
+        self._dupe_page_size = 50  # Load 50 pairs at a time (after initial load)
+        self._initial_load_size = 100  # First load is larger for initial scrolling
+        
+        self.updateStatusText.emit(f"Duplicate detection complete: Found {len(comparison_results)} pairs.\n")
+        self._load_dupe_page(initial=True)
 
+    def _load_dupe_page(self, initial: bool = False):
+        """Loads the next page of duplicate pairs into the list (auto-triggered by scroll)."""
+        if not hasattr(self, '_dupe_results') or not self._dupe_results:
+            return
+        
+        # Use larger page size for initial load
+        page_size = self._initial_load_size if initial else self._dupe_page_size
+        
+        # Calculate which items to load
+        start_idx = self._dupe_page * self._dupe_page_size if not initial else 0
+        end_idx = min(start_idx + page_size, len(self._dupe_results))
+        
+        if start_idx >= len(self._dupe_results):
+            return  # No more items to load
+        
+        # Load this page of items
+        for pair_data in self._dupe_results[start_idx:end_idx]:
+            self.add_dupe_pair_to_gui(pair_data)
+        
+        # Update page counter based on how many items were loaded
+        if initial:
+            self._dupe_page = (end_idx + self._dupe_page_size - 1) // self._dupe_page_size
+        else:
+            self._dupe_page += 1
+        
+        loaded_count = end_idx
+        total_count = len(self._dupe_results)
+        
+        self.updateStatusText.emit(f"Showing {loaded_count}/{total_count} duplicate pairs.\n")
 
     def on_detection_error(self, error_info: tuple):
         """Handles errors reported by the duplicate detection worker."""
@@ -830,5 +1041,129 @@ class ManageDirectoriesDialog(QDialog):
         self.reprocess_filesize_checkbox.setEnabled(enabled)
         self.reprocess_modtime_checkbox.setEnabled(enabled)
         self.reprocess_resolution_checkbox.setEnabled(enabled)
-        # Similarity spinbox
-        self.similarity_threshold_spinbox.setEnabled(enabled)
+        # Threshold spinboxes - both always enabled
+        self.catch_threshold_spinbox.setEnabled(enabled)
+        self.display_threshold_spinbox.setEnabled(enabled)
+        self.link_thresholds_checkbox.setEnabled(enabled)
+
+    # --- Context Menu for Dupe Pairs ---
+    def _show_dupe_context_menu(self, pos):
+        """Shows context menu for dupe pairs with copy/open/delete actions."""
+        item = self.image_list.itemAt(pos)
+        if not item:
+            return
+        
+        data = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(data, dict) or "path1" not in data:
+            return  # Not a dupe pair item
+        
+        path1 = data["path1"]
+        path2 = data["path2"]
+        
+        menu = QMenu(self)
+        
+        # Copy actions
+        copy_menu = menu.addMenu("Copy Path")
+        copy_path1_action = copy_menu.addAction(f"Copy: {os.path.basename(path1)}")
+        copy_path2_action = copy_menu.addAction(f"Copy: {os.path.basename(path2)}")
+        copy_both_action = copy_menu.addAction("Copy Both Paths")
+        
+        menu.addSeparator()
+        
+        # Open folder actions
+        open_folder1_action = menu.addAction(f"Open Folder: {os.path.basename(path1)}")
+        open_folder2_action = menu.addAction(f"Open Folder: {os.path.basename(path2)}")
+        
+        menu.addSeparator()
+        
+        # Preview actions
+        preview_menu = menu.addMenu("Open in Preview")
+        preview_path1_action = preview_menu.addAction(f"Preview: {os.path.basename(path1)}")
+        preview_path2_action = preview_menu.addAction(f"Preview: {os.path.basename(path2)}")
+        
+        menu.addSeparator()
+        
+        # Delete actions (with warning icons)
+        delete_menu = menu.addMenu("Delete (Recycle Bin)")
+        delete_path1_action = delete_menu.addAction(f"Delete: {os.path.basename(path1)}")
+        delete_path2_action = delete_menu.addAction(f"Delete: {os.path.basename(path2)}")
+        
+        # Execute menu and handle actions
+        action = menu.exec(self.image_list.mapToGlobal(pos))
+        
+        if action == copy_path1_action:
+            QApplication.clipboard().setText(path1)
+        elif action == copy_path2_action:
+            QApplication.clipboard().setText(path2)
+        elif action == copy_both_action:
+            QApplication.clipboard().setText(f"{path1}\n{path2}")
+        elif action == open_folder1_action:
+            self._open_containing_folder(path1)
+        elif action == open_folder2_action:
+            self._open_containing_folder(path2)
+        elif action == delete_path1_action:
+            self._delete_to_recycle_bin(path1, item)
+        elif action == delete_path2_action:
+            self._delete_to_recycle_bin(path2, item)
+        elif action == preview_path1_action:
+            self._open_in_preview(path1)
+        elif action == preview_path2_action:
+            self._open_in_preview(path2)
+
+    def _on_image_list_scroll(self, value: int):
+        """Auto-loads more results when scrolling near the bottom."""
+        scrollbar = self.image_list.verticalScrollBar()
+        if scrollbar.value() >= scrollbar.maximum() - 50:  # Near bottom
+            self._load_dupe_page()
+
+    def _open_in_preview(self, path: str):
+        """Opens an image in the main window preview panel."""
+        if hasattr(self.main_window, 'display_image_in_preview'):
+            self.main_window.display_image_in_preview(path)
+
+    def _open_containing_folder(self, path: str):
+        """Opens the folder containing the given file in the system file explorer."""
+        folder = os.path.dirname(path)
+        if os.path.isdir(folder):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+        else:
+            QMessageBox.warning(self, "Folder Not Found", f"Could not find folder:\n{folder}")
+
+    def _delete_to_recycle_bin(self, path: str, list_item: QListWidgetItem):
+        """Moves the file to recycle bin after confirmation."""
+        if not os.path.isfile(path):
+            QMessageBox.warning(self, "File Not Found", f"File no longer exists:\n{path}")
+            return
+        
+        filename = os.path.basename(path)
+        reply = QMessageBox.question(
+            self, "Confirm Delete",
+            f"Move this file to the Recycle Bin?\n\n{filename}",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                # Use send2trash for cross-platform recycle bin support
+                import send2trash
+                send2trash.send2trash(path)
+                QMessageBox.information(self, "Deleted", f"Moved to Recycle Bin:\n{filename}")
+                # Remove the item from the list
+                row = self.image_list.row(list_item)
+                self.image_list.takeItem(row)
+            except ImportError:
+                # Fallback: just delete permanently with extra confirmation
+                reply2 = QMessageBox.warning(
+                    self, "Permanent Delete",
+                    f"send2trash not installed. Permanently delete?\n\n{filename}\n\nThis cannot be undone!",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No
+                )
+                if reply2 == QMessageBox.StandardButton.Yes:
+                    os.remove(path)
+                    QMessageBox.information(self, "Deleted", f"Permanently deleted:\n{filename}")
+                    row = self.image_list.row(list_item)
+                    self.image_list.takeItem(row)
+            except Exception as e:
+                QMessageBox.critical(self, "Delete Error", f"Error deleting file:\n{e}")

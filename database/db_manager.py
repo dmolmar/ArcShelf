@@ -3,12 +3,13 @@ import os
 import threading
 import uuid
 from pathlib import Path
-from typing import List, Tuple, Optional, TYPE_CHECKING, Dict # Removed DefaultDict from here
+from typing import List, Tuple, Optional, TYPE_CHECKING, Dict, Set # Removed DefaultDict from here
 from collections import defaultdict # Added defaultdict import
 from PIL import Image
 
 # Import the new normalization function
 from utils.path_utils import normalize_path
+from utils.minhash_utils import compute_minhash_signature
 
 # Use TYPE_CHECKING to avoid circular imports for type hints
 if TYPE_CHECKING:
@@ -86,7 +87,17 @@ class Database:
                             cursor.execute("ALTER TABLE image_tags ADD COLUMN is_manual INTEGER DEFAULT 0")
                         except sqlite3.Error as e:
                             print(f"Error adding is_manual column: {e}")
- 
+
+                    # --- Schema Migration: Check for minhash_signature column in images ---
+                    try:
+                        cursor.execute("SELECT minhash_signature FROM images LIMIT 1")
+                    except sqlite3.OperationalError:
+                        print("Migrating database: Adding minhash_signature column to images table...")
+                        try:
+                            cursor.execute("ALTER TABLE images ADD COLUMN minhash_signature BLOB")
+                        except sqlite3.Error as e:
+                            print(f"Error adding minhash_signature column: {e}")
+
                     # --- Populate Default Categories ---
                     default_categories = ["general", "character", "artist", "copyright", "meta"]
                     cursor.executemany("INSERT OR IGNORE INTO categories (name) VALUES (?)", [(c,) for c in default_categories])
@@ -233,6 +244,20 @@ class Database:
 
                         if image_tags_to_insert:
                             cursor.executemany("INSERT INTO image_tags (image_id, tag_id, confidence, is_manual) VALUES (?, ?, ?, ?)", image_tags_to_insert)
+
+                        # --- Compute and store MinHash signature for duplicate detection ---
+                        # Collect all tag names for this image (both auto and manual)
+                        all_tag_names = {pred.tag for pred in filtered_predictions}
+                        # Also include manual tags that were already in the database
+                        if existing_manual_tag_ids:
+                            cursor.execute(f"SELECT name FROM tags WHERE id IN ({','.join('?' * len(existing_manual_tag_ids))})", 
+                                         list(existing_manual_tag_ids))
+                            all_tag_names.update(row[0] for row in cursor.fetchall())
+                        
+                        if all_tag_names:
+                            minhash_sig = compute_minhash_signature(all_tag_names)
+                            cursor.execute("UPDATE images SET minhash_signature = ? WHERE id = ?", 
+                                         (minhash_sig, image_id))
 
 
                     # Update thumbnail if needed
@@ -768,3 +793,100 @@ class Database:
         except sqlite3.Error as e:
             print(f"Database error getting tag category for {tag_name}: {e}")
             return None
+
+    def get_minhash_signatures_for_paths(self, paths: List[str]) -> Dict[str, Optional[bytes]]:
+        """
+        Retrieves MinHash signatures for a list of image paths.
+        
+        Args:
+            paths: List of image paths to fetch signatures for
+            
+        Returns:
+            Dict mapping path -> signature bytes (or None if not computed yet)
+        """
+        if not paths:
+            return {}
+        
+        results: Dict[str, Optional[bytes]] = {p: None for p in paths}
+        normalized_to_original: Dict[str, str] = {}
+        
+        for p in paths:
+            if p:
+                normalized = normalize_path(p)
+                if normalized:
+                    normalized_to_original[normalized] = p
+        
+        if not normalized_to_original:
+            return results
+        
+        try:
+            with self.lock:
+                with sqlite3.connect(self.db_path) as conn:
+                    conn.execute("PRAGMA query_only = ON")
+                    cursor = conn.cursor()
+                    
+                    # Fetch in chunks to avoid query size limits
+                    chunk_size = 500
+                    normalized_list = list(normalized_to_original.keys())
+                    
+                    for i in range(0, len(normalized_list), chunk_size):
+                        chunk = normalized_list[i:i+chunk_size]
+                        placeholders = ','.join('?' for _ in chunk)
+                        cursor.execute(f"""
+                            SELECT path, minhash_signature 
+                            FROM images 
+                            WHERE path IN ({placeholders})
+                        """, chunk)
+                        
+                        for db_path, signature in cursor.fetchall():
+                            if db_path:
+                                normalized_db = normalize_path(db_path)
+                                original_path = normalized_to_original.get(normalized_db)
+                                if original_path:
+                                    results[original_path] = signature
+                    
+        except sqlite3.Error as e:
+            print(f"Database error fetching MinHash signatures: {e}")
+        
+        return results
+
+    def get_tags_for_path(self, path: str) -> Set[str]:
+        """
+        Retrieves all tag names for a given image path.
+        
+        Args:
+            path: Image path
+            
+        Returns:
+            Set of tag names, or empty set if not found
+        """
+        normalized_path = normalize_path(path)
+        try:
+            with self.lock:
+                with sqlite3.connect(self.db_path) as conn:
+                    conn.execute("PRAGMA query_only = ON")
+                    cursor = conn.cursor()
+                    cursor.execute("""
+                        SELECT t.name
+                        FROM tags t
+                        JOIN image_tags it ON t.id = it.tag_id
+                        JOIN images i ON it.image_id = i.id
+                        WHERE i.path = ?
+                    """, (normalized_path,))
+                    return {row[0] for row in cursor.fetchall()}
+        except sqlite3.Error as e:
+            print(f"Database error getting tags for {normalized_path}: {e}")
+            return set()
+
+    def update_minhash_signature(self, path: str, signature: bytes):
+        """Updates the MinHash signature for a given image path."""
+        normalized_path = normalize_path(path)
+        try:
+            with self.lock:
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("UPDATE images SET minhash_signature = ? WHERE path = ?",
+                                 (signature, normalized_path))
+                    conn.commit()
+        except sqlite3.Error as e:
+            print(f"Database error updating MinHash signature for {normalized_path}: {e}")

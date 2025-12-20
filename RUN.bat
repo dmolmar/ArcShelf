@@ -158,5 +158,5 @@ IF EXIST "%VENV_DIR%\Scripts\deactivate.bat" (
 
 :EndScript
 REM Removed setup.log creation/modification
-REM pause
+pause
 endlocal
