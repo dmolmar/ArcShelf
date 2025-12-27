@@ -440,7 +440,8 @@ class Database:
 
     def get_matching_tags_for_directories(self, desired_dirs: List[str], undesired_dirs: List[str],
                                           desired_tags: List[str], undesired_tags: List[str],
-                                          search_term: str, limit: Optional[int] = 100) -> List[Tuple[str, int]]:
+                                          search_term: str, limit: Optional[int] = 100,
+                                          limit_to_image_ids: Optional[List[str]] = None) -> List[Tuple[str, int]]:
         """
         Finds tags matching a search term prefix within images filtered by directories and tags.
         If search_term is empty, returns top tags by count.
@@ -453,26 +454,46 @@ class Database:
             search_term: The prefix term to filter tag names by (case-insensitive LIKE 'term%').
                          If empty, returns top tags.
             limit: Max number of tags to return (especially useful when search_term is empty).
+            limit_to_image_ids: Optional list of image IDs to restrict the search to. 
+                                used for context-aware suggestions.
 
         Returns:
             A list of tuples (tag_name, count), sorted by count descending.
         """
-        print(f"Database: get_matching_tags_for_directories called with search_term='{search_term}'")
+        print(f"Database: get_matching_tags_for_directories called with search_term='{search_term}', limit_ids={'Yes' if limit_to_image_ids is not None else 'No'}")
 
-        if not desired_dirs:
-            print("Database: No desired directories selected, returning empty list for tag matching.")
+        if not desired_dirs and limit_to_image_ids is None:
+            print("Database: No desired directories and no ID limit, returning empty list.")
             return []
 
         try:
             with self.lock:
-                with sqlite3.connect(self.db_path) as conn:
-                    conn.execute("PRAGMA query_only = ON")
+                # Use isolation_level=None to allow CREATE TEMP TABLE to work effectively/be visible within the connection
+                with sqlite3.connect(self.db_path, isolation_level=None) as conn:
+                    # conn.execute("PRAGMA query_only = ON") # Can't be query_only if we create temp tables
                     cursor = conn.cursor()
+
+                    # --- Handle limit_to_image_ids with Temp Table ---
+                    if limit_to_image_ids is not None:
+                        try:
+                            cursor.execute("CREATE TEMP TABLE IF NOT EXISTS temp_filtered_ids (id TEXT PRIMARY KEY)")
+                            cursor.execute("DELETE FROM temp_filtered_ids") # Clear previous if any
+                            if limit_to_image_ids:
+                                cursor.executemany("INSERT INTO temp_filtered_ids (id) VALUES (?)", [(id,) for id in limit_to_image_ids])
+                        except sqlite3.Error as e:
+                            print(f"Database: Error creating/populating temp table: {e}")
+                            return []
 
                     # --- Build subquery to filter image IDs ---
                     image_id_subquery = "SELECT i.id FROM images i"
                     image_conditions = []
                     image_params = []
+                    
+                    # 0. Context Filter (if provided)
+                    if limit_to_image_ids is not None:
+                        image_id_subquery += " JOIN temp_filtered_ids tfi ON i.id = tfi.id"
+                        # Note: We rely on the join to filter. 
+                        # If list was empty, temp table is empty, result is empty. Correct.
 
                     # 1. Desired Directories (OR logic between directories)
                     dir_conditions = []
@@ -553,6 +574,13 @@ class Database:
 
                     cursor.execute(tag_query, final_params)
                     result = cursor.fetchall()
+
+                    # Clean up temp table
+                    if limit_to_image_ids is not None:
+                         try:
+                             cursor.execute("DROP TABLE IF EXISTS temp_filtered_ids")
+                         except: pass
+
                     print(f"Database: Tag matching query returned {len(result)} tags.")
                     return result
 

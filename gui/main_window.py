@@ -1617,18 +1617,17 @@ class ImageGallery(QMainWindow):
     # --- Search Logic ---
     def update_suggestions(self):
         """Fetches suggestions based on current query/cursor and updates the main suggestion list."""
-        print("ImageGallery: update_suggestions called")
+        # print("ImageGallery: update_suggestions called") # Reduced verbosity
 
         search_field_has_focus = self.advanced_search_panel.search_field.hasFocus()
         text = self.advanced_search_panel.get_current_query()
         cursor_pos = self.advanced_search_panel.get_cursor_position()
 
         # --- Logic to find the term being typed (KEEP PREVIOUS VERSION) ---
-        # (Copied from your provided code)
         start_pos = cursor_pos
         # Find start of current word/segment (adjust logic if needed for operators)
         delimiters = [r'\bAND\b', r'\bOR\b', r'\bNOT\b', r'\[', r'\]'] # Added brackets
-        delimiter_regex = re.compile('|'.join(delimiters), re.IGNORECASE)
+        # delimiter_regex = re.compile('|'.join(delimiters), re.IGNORECASE) # Unused
         found_boundary = False
         check_pos = start_pos - 1
         while check_pos >= 0:
@@ -1661,18 +1660,49 @@ class ImageGallery(QMainWindow):
         current_term = text[start_pos:cursor_pos].strip() # Get the segment and strip spaces
         # --- End Logic to find the term ---
 
-        print(f"  Term being typed: '{current_term}' (from pos {start_pos} to {cursor_pos})")
+        # print(f"  Term being typed: '{current_term}' (from pos {start_pos} to {cursor_pos})")
         self._suggestions_map.clear() # Use the main window's map
+
+        # --- NEW: Context Evaluation logic ---
+        context_ids = None
+        context_str_raw = text[:start_pos].strip()
+        
+        # Only try to parse context if there's something substantial
+        if context_str_raw and search_field_has_focus and self.active_directories:
+            # Clean trailing operators/brackets from context
+            clean_context = context_str_raw
+            while True:
+                prev = clean_context
+                # Remove trailing AND, OR, NOT, [, ]
+                # Be careful not to break valid queries, but usually trailing operators mean incomplete query
+                clean_context = re.sub(r'(\s+\b(AND|OR|NOT)\b\s*$)|(\s*[\[\]]\s*$)', '', clean_context, flags=re.IGNORECASE).strip()
+                if clean_context == prev:
+                    break
+            
+            if clean_context:
+                # print(f"  Evaluating context: '{clean_context}'")
+                try:
+                    parser = SearchQueryParser()
+                    ast = parser.parse(clean_context)
+                    evaluator = SearchQueryEvaluator(self.db, self.active_directories)
+                    context_ids = evaluator.evaluate(ast)
+                    # print(f"  Context matches {len(context_ids)} images.")
+                except Exception as e:
+                    # If context is invalid (syntax error), ignore it and use global suggestions
+                    # print(f"  Context evaluation failed (using global): {e}")
+                    context_ids = None
 
         # --- Fetch suggestions (only if field still has focus) ---
         # Re-check focus before hitting the database.
         if search_field_has_focus and self.active_directories:
             try:
+                # Use context_ids if available to filter suggestions
                 tags_with_counts = self.db.get_matching_tags_for_directories(
                     desired_dirs=list(self.active_directories), undesired_dirs=[],
                     desired_tags=[], undesired_tags=[],
                     search_term=current_term,
-                    limit=100 # Keep limit reasonable
+                    limit=100, # Keep limit reasonable
+                    limit_to_image_ids=list(context_ids) if context_ids is not None else None
                 )
                 # Populate the main window's suggestion map
                 self._suggestions_map = {f"{tag} ({count})": tag for tag, count in tags_with_counts}
