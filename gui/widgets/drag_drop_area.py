@@ -1014,6 +1014,11 @@ class DragDropArea(QGraphicsView):
         if current_image_path and hasattr(self.image_gallery, 'open_manage_tags_dialog'):
              self.image_gallery.open_manage_tags_dialog(current_image_path)
 
+    def clear_dropped_image_state(self):
+        """Resets the state related to dropped images (path and temporary predictions)."""
+        self.dropped_image_path = None
+        self.temporary_predictions = None
+
     def remove_image(self):
         """Clears the displayed image, LODs, and associated data, showing the placeholder."""
         print("DragDropArea: Remove Image clicked")

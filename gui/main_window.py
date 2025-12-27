@@ -98,6 +98,8 @@ class ImageGallery(QMainWindow):
         self.active_loaders: List[ThumbnailLoader] = []  # Track active loaders for cancellation
         self._temp_pred_callback: Optional[Callable] = None # For drag-drop predictions
         self._suggestions_map: Dict[str, str] = {}
+        self.current_similarity_reference_path: Optional[str] = None # Stores the image used for similarity context
+        self.current_similarity_reference_tags: Optional[List[TagPrediction]] = None # Stores tags for temp images
         self._ignore_cursor_change_on_focus = False
         # Removed self.requirements_met flag
 
@@ -875,6 +877,9 @@ class ImageGallery(QMainWindow):
     def handle_image_click(self, img_path: str, analyze: bool = False, thumbnail_pixmap: Optional[QPixmap] = None):
         """Handles click on an image in the gallery."""
         self.last_selected_image_path = img_path
+        # Fix Bug 1: Ensure dropped image state is cleared so context menu works on the selected image
+        if self.drag_drop_area:
+             self.drag_drop_area.clear_dropped_image_state()
         
         # Show "Loading..." immediately in the info text box
         self.info_text.setHtml("<i>Loading...</i>")
@@ -1825,10 +1830,21 @@ class ImageGallery(QMainWindow):
         print(f"  Effective search_query: '{search_query}'")
 
         current_sort_is_similarity = (self.sorting_combo.currentText() == "Similarity")
+        
         if similarity_search:
+             # Explicit similarity search requested (e.g. from context menu or duplicate finder)
              if not similar_image_path:
-                  if self.last_selected_image_path: similar_image_path = self.last_selected_image_path; print(f"  Using last selected image for similarity: {similar_image_path}")
-                  else: QMessageBox.warning(self, "Similarity Search", "Please select an image first."); return
+                  if self.last_selected_image_path: 
+                       similar_image_path = self.last_selected_image_path
+                       print(f"  Using last selected image for similarity: {similar_image_path}")
+                  else: 
+                       QMessageBox.warning(self, "Similarity Search", "Please select an image first.")
+                       return
+             
+             # Store this as the active reference for future searches (e.g. text edits)
+             self.current_similarity_reference_path = similar_image_path
+             self.current_similarity_reference_tags = tags
+             
              sim_index = self.sorting_combo.findText("Similarity")
              if sim_index != -1:
                   self.suppress_search_on_dropdown_update = True
@@ -1837,10 +1853,28 @@ class ImageGallery(QMainWindow):
                   self.sort_order_combo.setEnabled(True)
                   self.suppress_search_on_dropdown_update = False
                   self.similarity_mode = True
+                  
         elif current_sort_is_similarity:
-             if self.last_selected_image_path: similarity_search, similar_image_path = True, self.last_selected_image_path; print(f"  Using last selected image due to Similarity sort: {similar_image_path}")
+             # Implicit similarity persistence (user edited text while in Similarity mode)
+             # Fix Bug 3: Prefer the stored reference path over last_selected, which might be stale/irrelevant
+             ref_path = self.current_similarity_reference_path or self.last_selected_image_path
+             ref_tags = self.current_similarity_reference_tags
+             
+             if ref_path: 
+                  similarity_search = True
+                  similar_image_path = ref_path
+                  # Use stored tags if we are using the stored path
+                  if ref_path == self.current_similarity_reference_path:
+                      tags = ref_tags
+                  
+                  # Ensure we keep the reference updated if we fell back to last_selected
+                  if ref_path != self.current_similarity_reference_path:
+                      self.current_similarity_reference_path = ref_path
+                      self.current_similarity_reference_tags = None # Clear tags if we switched to a DB image (likely) or user selected one without passing tags
+                  
+                  print(f"  Persisting similarity search using reference: {similar_image_path}")
              else:
-                  print("  Warning: Similarity sort selected, but no image context. Switching to 'Date'.")
+                  print("  Warning: Similarity sort selected, but no reference image context. Switching to 'Date'.")
                   self.suppress_search_on_dropdown_update = True; self.sorting_combo.setCurrentText("Date"); self.sort_order_combo.setEnabled(True); self.suppress_search_on_dropdown_update = False; self.similarity_mode = False
 
         try:

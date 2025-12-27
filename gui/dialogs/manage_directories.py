@@ -1131,6 +1131,9 @@ class ManageDirectoriesDialog(QDialog):
 
     def _delete_to_recycle_bin(self, path: str, list_item: QListWidgetItem):
         """Moves the file to recycle bin after confirmation."""
+        # Normalize path to fix Windows extended path issues
+        path = os.path.normpath(path)
+        
         if not os.path.isfile(path):
             QMessageBox.warning(self, "File Not Found", f"File no longer exists:\n{path}")
             return
