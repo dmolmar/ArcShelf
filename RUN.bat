@@ -2,95 +2,58 @@
 setlocal
 
 REM --- Configuration ---
-set VENV_DIR=.venv
+set CONDA_ENV_NAME=arcshelf
 set REQ_FILE=requirements.txt
-set PYTHON_CMD=py -3.10
+set PYTHON_VERSION=3.10
 
-REM --- Check for Python in PATH ---
-echo Checking for Python installation...
-REM Run python --version and show output/errors
-REM Check error level using preferred syntax
-REM Check error level using || goto syntax
-%PYTHON_CMD% --version
-if errorlevel 1 goto PythonCheckFailed
-goto PythonCheckPassed
-
-:PythonCheckFailed
-echo ERROR: Python (%PYTHON_CMD%) command failed or Python was not found in your system's PATH.
-echo Please install Python (3.8+ recommended) and ensure it's added to PATH.
-goto EndScript
-
-:PythonCheckPassed
-REM Python check passed, continue script
-
-REM --- Python check passed ---
-echo Python found.
-
-REM --- Check/Setup Virtual Environment ---
-IF EXIST ".venv\Scripts\activate.bat" goto VenvExists
-goto VenvNotFound
-
-:VenvExists
-REM --- Activate Existing Venv and Update ---
-echo Activating existing virtual environment...
-call "%VENV_DIR%\Scripts\activate.bat"
+REM --- Check for Conda installation ---
+echo Checking for Conda installation...
+where conda >nul 2>&1
 if errorlevel 1 (
-    echo ERROR: Failed to activate existing virtual environment.
+    echo ERROR: Conda not found in PATH.
+    echo Please ensure Miniconda/Anaconda is installed and added to PATH.
+    echo You may need to run this from Anaconda Prompt or add Conda to your system PATH.
     goto EndScript
 )
-echo Virtual environment activated.
+echo Conda found.
 
-echo Checking/updating requirements...
-REM Added --force-reinstall to ensure all packages are present and correct
-"%VENV_DIR%\Scripts\python.exe" -m pip install -q -r "%REQ_FILE%" --no-cache-dir --disable-pip-version-check
+REM --- Check if conda environment exists ---
+echo Checking for '%CONDA_ENV_NAME%' environment...
+call conda info --envs | findstr /C:"%CONDA_ENV_NAME%" >nul 2>&1
+if errorlevel 1 goto CreateEnv
+goto ActivateEnv
+
+:CreateEnv
+REM --- Create new conda environment with Python 3.10 ---
+echo Environment '%CONDA_ENV_NAME%' not found. Creating with Python %PYTHON_VERSION%...
+call conda create -n %CONDA_ENV_NAME% python=%PYTHON_VERSION% -y
 if errorlevel 1 (
-    echo ERROR: Failed to update/reinstall requirements in existing venv. Check console output.
-    echo Possible issues: network connection, file permissions, incompatible packages.
-    echo For GPU features, ensure compatible drivers and potentially the Visual C++ Redistributable are installed.
+    echo ERROR: Failed to create conda environment.
     goto EndScript
 )
-echo Requirements are up to date.
-goto LaunchApp
+echo Environment created successfully.
 
-:VenvNotFound
-REM --- Create New Venv and Install ---
-echo Virtual environment not found. Creating...
-%PYTHON_CMD% -m venv "%VENV_DIR%"
+:ActivateEnv
+REM --- Activate conda environment ---
+echo Activating '%CONDA_ENV_NAME%' environment...
+call conda activate %CONDA_ENV_NAME%
 if errorlevel 1 (
-    echo ERROR: Failed to create virtual environment. Check Python installation and permissions.
+    echo ERROR: Failed to activate conda environment.
+    echo Try running this script from Anaconda Prompt.
     goto EndScript
 )
-echo Virtual environment created.
+echo Environment activated.
 
-echo Activating new virtual environment...
-call "%VENV_DIR%\Scripts\activate.bat"
-if errorlevel 1 (
-    echo ERROR: Failed to activate newly created virtual environment.
-    goto EndScript
-)
-echo Virtual environment activated.
-
-echo Upgrading pip...
-"%VENV_DIR%\Scripts\python.exe" -m pip install --upgrade pip --disable-pip-version-check
-if %ERRORLEVEL% neq 0 (
-    echo WARNING: Failed to upgrade pip. Continuing with potentially older version.
-)
-
-echo Installing requirements from %REQ_FILE%...
-"%VENV_DIR%\Scripts\python.exe" -m pip install -q -r "%REQ_FILE%" --no-cache-dir --disable-pip-version-check
+REM --- Install/Update requirements ---
+echo Checking/updating requirements from %REQ_FILE%...
+pip install -q -r "%REQ_FILE%" --no-cache-dir --disable-pip-version-check
 if errorlevel 1 (
     echo ERROR: Failed to install requirements. Check console output above.
     echo Possible issues: network connection, file permissions, incompatible packages.
     echo For GPU features, ensure compatible drivers and potentially the Visual C++ Redistributable are installed.
     goto EndScript
 )
-echo Requirements installed successfully.
-goto LaunchApp
-
-:LaunchApp
-REM --- Code continues here after venv is ready ---
-
-REM ONNX Runtime installation is now handled by requirements.txt
+echo Requirements are up to date.
 
 REM --- Check for model.onnx and selected_tags.csv ---
 set MODELS_DIR=models
@@ -146,17 +109,9 @@ echo Starting ArcShelf...
 set ARCSHELF_LAUNCHED_VIA_BAT=1
 REM Enable High-DPI scaling for Qt applications
 set QT_ENABLE_HIGHDPI_SCALING=1
-"%VENV_DIR%\Scripts\python.exe" main.py
+python main.py
 echo ArcShelf finished.
 
-REM --- Deactivate ---
-REM Attempt to deactivate (might fail if venv wasn't active, ignore error)
-IF EXIST "%VENV_DIR%\Scripts\deactivate.bat" (
-    echo Deactivating virtual environment...
-    call "%VENV_DIR%\Scripts\deactivate.bat"
-)
-
 :EndScript
-REM Removed setup.log creation/modification
 pause
 endlocal
